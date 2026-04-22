@@ -7,7 +7,7 @@ import "dotenv/config";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const ANALYSIS_DIR = join(__dirname, "..", "analysis");
-const INSTRUCTIONS_PATH = join(__dirname, "..", "..", ".github", "AI_ANALYSIS_INSTRUCTIONS.md");
+const INSTRUCTIONS_PATH = join(__dirname, "..", "AI_ANALYSIS_INSTRUCTIONS.md");
 
 // ─── Config ───
 

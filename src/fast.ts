@@ -25,7 +25,7 @@ try { __dirname = dirname(fileURLToPath(import.meta.url)); } catch { __dirname =
 const BASE_DIR = existsSync(join(__dirname, "..", "package.json")) ? join(__dirname, "..") : process.cwd();
 const OUTPUT_DIR = join(BASE_DIR, "output");
 const ANALYSIS_DIR = join(BASE_DIR, "analysis");
-const INSTRUCTIONS_PATH = join(__dirname, "..", "..", ".github", "AI_ANALYSIS_INSTRUCTIONS.md");
+const INSTRUCTIONS_PATH = join(BASE_DIR, "AI_ANALYSIS_INSTRUCTIONS.md");
 
 function getInstructions(): string {
   // Bundled mode: embedded at build time via esbuild define
@@ -257,9 +257,12 @@ async function main() {
     const streamTable = buildStreamTable(enriched);
 
     // ─── Fetch weather (multi-point: 0/25/50/75% of route, parallel) ───
-    const waypoints = buildWeatherWaypoints(streamTable as any[], enriched.activity.start_date);
+    const isIndoor = ["VirtualRide", "VirtualRun"].includes(enriched.activity.sport_type) || (enriched.activity as any).trainer === true;
+    const waypoints = isIndoor ? [] : buildWeatherWaypoints(streamTable as any[], enriched.activity.start_date);
     let weather = null;
-    if (waypoints.length > 0) {
+    if (isIndoor) {
+      console.log(`   🏠 Indoor/virtual activity — skipping weather fetch.`);
+    } else if (waypoints.length > 0) {
       console.log(`   🌤️ Fetching weather (${waypoints.length} hour${waypoints.length > 1 ? "s" : ""} covered, parallel)...`);
       weather = await fetchWeatherMultiPoint(waypoints);
       if (weather?.at_start) {

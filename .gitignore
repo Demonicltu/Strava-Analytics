@@ -2,6 +2,7 @@ node_modules/
 dist/
 output/
 analysis/
-release/
+release/.env
+release/.env_2
 .env
 

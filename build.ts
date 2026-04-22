@@ -9,7 +9,7 @@ const releaseDir = join(rootDir, "release");
 if (!existsSync(distDir)) mkdirSync(distDir);
 
 // Read AI instructions to embed as string constant
-const instructionsPath = join(rootDir, "..", ".github", "AI_ANALYSIS_INSTRUCTIONS.md");
+const instructionsPath = join(rootDir, "AI_ANALYSIS_INSTRUCTIONS.md");
 const instructions = existsSync(instructionsPath) ? readFileSync(instructionsPath, "utf-8") : "";
 
 async function main() {
@@ -42,15 +42,17 @@ async function main() {
   copyFileSync(join(rootDir, ".env.example"), join(releaseDir, ".env.example"));
   if (existsSync(join(rootDir, "METRICS.md"))) copyFileSync(join(rootDir, "METRICS.md"), join(releaseDir, "METRICS.md"));
   if (existsSync(join(rootDir, "COMMANDS.md"))) copyFileSync(join(rootDir, "COMMANDS.md"), join(releaseDir, "COMMANDS.md"));
+  if (existsSync(join(rootDir, "AI_ANALYSIS_INSTRUCTIONS.md"))) copyFileSync(join(rootDir, "AI_ANALYSIS_INSTRUCTIONS.md"), join(releaseDir, "AI_ANALYSIS_INSTRUCTIONS.md"));
 
   console.log(`📦 Release folder ready: release/`);
   console.log(`   release/`);
-  console.log(`   ├── strava.bat        ← double-click to run`);
-  console.log(`   ├── dist/strava.cjs   ← bundled app (${size} KB)`);
-  console.log(`   ├── .env              ← edit credentials here`);
-  console.log(`   ├── .env.example      ← reference`);
-  console.log(`   ├── METRICS.md        ← metrics guide`);
-  console.log(`   └── COMMANDS.md       ← usage guide`);
+  console.log(`   ├── strava.bat                    ← double-click to run`);
+  console.log(`   ├── dist/strava.cjs               ← bundled app (${size} KB)`);
+  console.log(`   ├── .env                          ← edit credentials here`);
+  console.log(`   ├── .env.example                  ← reference`);
+  console.log(`   ├── METRICS.md                    ← metrics guide`);
+  console.log(`   ├── COMMANDS.md                   ← usage guide`);
+  console.log(`   └── AI_ANALYSIS_INSTRUCTIONS.md   ← AI analysis prompt`);
   console.log(`\n   ⚠️  Update .env with your friend's Strava credentials before sharing!`);
 }
 

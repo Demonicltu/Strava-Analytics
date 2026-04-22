@@ -285,9 +285,12 @@ async function main() {
 
       // Fetch weather (multi-point: 0/25/50/75% of route, parallel)
       const streamTable = buildStreamTable(enriched);
-      const waypoints = buildWeatherWaypoints(streamTable as any[], enriched.activity.start_date);
+      const isIndoor = ["VirtualRide", "VirtualRun"].includes(enriched.activity.sport_type) || (enriched.activity as any).trainer === true;
+      const waypoints = isIndoor ? [] : buildWeatherWaypoints(streamTable as any[], enriched.activity.start_date);
       let weather = null;
-      if (waypoints.length > 0) {
+      if (isIndoor) {
+        console.log(`\n   🏠 Indoor/virtual activity — skipping weather fetch.`);
+      } else if (waypoints.length > 0) {
         console.log(`\n   🌤️ Fetching weather (${waypoints.length} hour${waypoints.length > 1 ? "s" : ""} covered, parallel)...`);
         weather = await fetchWeatherMultiPoint(waypoints);
         if (weather?.at_start) {

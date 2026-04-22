@@ -272,7 +272,7 @@ export function buildDescription(crunched: any, analysisText: string | null): st
     }
   }
 
-  // ─── Training Zones (right after verdict — most visual/useful) ───
+  // ─── Training Zones (from AI if available, else from crunched) ───
   if (analysisText) {
     const zones = extractSection(analysisText, "Training Zones");
     if (zones) {
@@ -282,6 +282,133 @@ export function buildDescription(crunched: any, analysisText: string | null): st
       lines.push(``);
       lines.push(hrZoneHeader);
       lines.push(formatTablesForPlainText(zones.trim()));
+    }
+  } else if (crunched.training_zones) {
+    const tz = crunched.training_zones;
+    lines.push(``);
+    lines.push(`⚠️ AI analysis unavailable — raw metrics below`);
+
+    // HR zones
+    if (tz.hr_zones?.zones?.length) {
+      const hdr = tz.hr_zones.section_header
+        ? `🎯 ${tz.hr_zones.section_header.toUpperCase()}`
+        : `🎯 HR ZONES`;
+      lines.push(``);
+      lines.push(hdr);
+      for (const z of tz.hr_zones.zones) {
+        lines.push(`  ${z.zone} (${z.range_bpm} bpm): ${z.time_formatted} — ${z.pct}%`);
+      }
+    }
+
+    // Power zones
+    if (tz.power_zones?.zones?.length) {
+      lines.push(``);
+      lines.push(`⚡ POWER ZONES (FTP: ${tz.power_zones.ftp_used}W)`);
+      for (const z of tz.power_zones.zones) {
+        lines.push(`  ${z.zone} (${z.range_watts}): ${z.time_formatted} — ${z.pct}%`);
+      }
+    }
+
+    // Cadence zones
+    if (tz.cadence_zones?.zones?.length) {
+      lines.push(``);
+      lines.push(`🔄 CADENCE ZONES`);
+      for (const z of tz.cadence_zones.zones) {
+        if (z.pct > 0) lines.push(`  ${z.zone}: ${z.time_formatted} — ${z.pct}%`);
+      }
+    }
+  }
+
+  // ─── No-AI fallback: Pacing, Peak Efforts, Power Skills, VAM, Gradient, Segments ───
+  if (!analysisText) {
+    // Pacing
+    const pac = crunched.pacing;
+    if (pac) {
+      lines.push(``);
+      lines.push(`📈 PACING`);
+      lines.push(`  Type: ${pac.type}`);
+      if (pac.first_half && pac.second_half) {
+        lines.push(`  1st half: ${pac.first_half.avg_speed_kmh} km/h @ ${pac.first_half.avg_hr} bpm`);
+        lines.push(`  2nd half: ${pac.second_half.avg_speed_kmh} km/h @ ${pac.second_half.avg_hr} bpm`);
+      }
+      if (pac.fastest_km) lines.push(`  Fastest km: #${pac.fastest_km.km} — ${pac.fastest_km.speed_kmh} km/h (${pac.fastest_km.moving_time})`);
+      if (pac.slowest_km) lines.push(`  Slowest km: #${pac.slowest_km.km} — ${pac.slowest_km.speed_kmh} km/h (${pac.slowest_km.moving_time})`);
+    }
+
+    // Heart Rate peak efforts
+    const hrPeaks = crunched.heart_rate?.peak_efforts;
+    if (hrPeaks) {
+      lines.push(``);
+      lines.push(`❤️ HEART RATE PEAKS`);
+      for (const [dur, val] of Object.entries(hrPeaks)) {
+        lines.push(`  ${dur}: ${val}`);
+      }
+      if (crunched.heart_rate?.cardiac_drift) {
+        const cd = crunched.heart_rate.cardiac_drift;
+        lines.push(`  Cardiac drift: ${cd.drift_bpm > 0 ? "+" : ""}${cd.drift_bpm} bpm (${cd.drift_pct}%)`);
+      }
+    }
+
+    // Power best efforts
+    const pwrEfforts = crunched.power?.best_efforts;
+    if (pwrEfforts) {
+      lines.push(``);
+      lines.push(`⚡ POWER BEST EFFORTS`);
+      for (const [dur, val] of Object.entries(pwrEfforts)) {
+        lines.push(`  ${dur}: ${val}`);
+      }
+    }
+
+    // Power skills
+    const ps = crunched.power_skills;
+    if (ps) {
+      lines.push(``);
+      lines.push(`💪 POWER SKILLS`);
+      if (ps.sprint_5s_pct_ftp) lines.push(`  Sprint (5s): ${ps.sprint_5s_pct_ftp}`);
+      if (ps.attack_1min_pct_ftp) lines.push(`  Attack (1min): ${ps.attack_1min_pct_ftp}`);
+      if (ps.sustained_5min_pct_ftp) lines.push(`  Sustained (5min): ${ps.sustained_5min_pct_ftp}`);
+      if (ps.sustained_20min_pct_ftp) lines.push(`  Sustained (20min): ${ps.sustained_20min_pct_ftp}`);
+      if (ps.primary_strength) lines.push(`  Primary strength: ${ps.primary_strength}`);
+    }
+
+    // Aerobic decoupling
+    const ad = crunched.aerobic_decoupling;
+    if (ad) {
+      const grade = Math.abs(ad.decoupling_pct) < 3 ? "excellent" : Math.abs(ad.decoupling_pct) < 5 ? "good" : Math.abs(ad.decoupling_pct) < 10 ? "needs work" : "poor";
+      lines.push(``);
+      lines.push(`🫀 AEROBIC DECOUPLING`);
+      lines.push(`  ${ad.decoupling_pct}% (${grade} — <3% ideal)`);
+    }
+
+    // VAM
+    const vam = crunched.vam_analysis;
+    if (vam?.climbs?.length) {
+      lines.push(``);
+      lines.push(`🧗 VAM CLIMBS`);
+      for (const c of vam.climbs) {
+        lines.push(`  km ${c.start_km}: +${c.elevation_gain_m}m in ${c.duration_formatted} → ${c.vam} VAM`);
+      }
+    }
+
+    // Gradient distribution
+    const grad = crunched.gradient_analysis?.distribution;
+    if (grad?.length) {
+      lines.push(``);
+      lines.push(`📐 GRADIENT`);
+      for (const g of grad) {
+        if (g.pct > 0) lines.push(`  ${g.label}: ${g.pct}%`);
+      }
+    }
+
+    // Segment highlights
+    const segs = crunched.segments_summary?.highlight_table;
+    if (segs?.length) {
+      lines.push(``);
+      lines.push(`🏅 TOP SEGMENTS`);
+      for (const s of segs) {
+        const pr = s.pr ? ` ${s.pr}` : ``;
+        lines.push(`  ${s.name} — ${s.distance} in ${s.time} @ ${s.avg_hr} bpm${pr}`);
+      }
     }
   }
 
