@@ -16,6 +16,8 @@ import { fetchEnrichedActivity } from "./details.js";
 import { crunchActivity, formatDuration } from "./crunch.js";
 import { buildDescription, buildPrivateNotes } from "./format.js";
 import { fetchWeatherMultiPoint, buildWeatherWaypoints } from "./weather.js";
+import { loadAllSummaries, buildHistoricalContext, groupSport, extractSummary, checkPRs } from "./summary_utils.js";
+import { loadWellnessContext } from "./wellness.js";
 import type { SummaryActivity } from "./types.js";
 import type { AxiosInstance } from "axios";
 
@@ -27,16 +29,35 @@ const OUTPUT_DIR = join(BASE_DIR, "output");
 const ANALYSIS_DIR = join(BASE_DIR, "analysis");
 const INSTRUCTIONS_PATH = join(BASE_DIR, "AI_ANALYSIS_INSTRUCTIONS.md");
 
+/**
+ * Compact whitespace in markdown without breaking structure.
+ * Outside fenced code blocks: collapse 2+ spaces → 1, strip trailing ws,
+ * collapse 3+ blank lines → 2. Code fences (``` blocks) preserved verbatim.
+ */
+function compactMarkdown(text: string): string {
+  if (!text) return text;
+  const lines = text.split("\n");
+  const out: string[] = [];
+  let inFence = false;
+  for (const line of lines) {
+    if (/^\s*```/.test(line)) { inFence = !inFence; out.push(line.replace(/[ \t]+$/, "")); continue; }
+    if (inFence) { out.push(line); continue; }
+    out.push(line.replace(/  +/g, " ").replace(/[ \t]+$/, ""));
+  }
+  return out.join("\n").replace(/\n{3,}/g, "\n\n");
+}
+
 function getInstructions(): string {
   // Bundled mode: embedded at build time via esbuild define
   const embedded = (process.env as any).EMBEDDED_AI_INSTRUCTIONS;
-  if (typeof embedded === "string" && embedded.length > 100) return embedded;
-  // Dev mode: read from file
-  if (existsSync(INSTRUCTIONS_PATH)) return readFileSync(INSTRUCTIONS_PATH, "utf-8");
-  // Fallback: try cwd
-  const cwdPath = join(process.cwd(), "AI_ANALYSIS_INSTRUCTIONS.md");
-  if (existsSync(cwdPath)) return readFileSync(cwdPath, "utf-8");
-  return "";
+  let raw = "";
+  if (typeof embedded === "string" && embedded.length > 100) raw = embedded;
+  else if (existsSync(INSTRUCTIONS_PATH)) raw = readFileSync(INSTRUCTIONS_PATH, "utf-8");
+  else {
+    const cwdPath = join(process.cwd(), "AI_ANALYSIS_INSTRUCTIONS.md");
+    if (existsSync(cwdPath)) raw = readFileSync(cwdPath, "utf-8");
+  }
+  return compactMarkdown(raw);
 }
 
 // ─── Helpers ───
@@ -125,7 +146,7 @@ async function callAI(provider: string, apiKey: string, model: string, instructi
     const url = PROVIDER_URLS[provider] || PROVIDER_URLS.openai;
     for (let attempt = 1; attempt <= 3; attempt++) {
       try {
-        const res = await axios.post(url, { model, messages: [{ role: "system", content: instructions }, { role: "user", content: userMsg }], temperature: 0.4, max_tokens: 8000 }, { headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" }, timeout: 180_000 });
+        const res = await axios.post(url, { model, messages: [{ role: "system", content: instructions }, { role: "user", content: userMsg }], temperature: 0.4, max_tokens: 16000 }, { headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" }, timeout: 240_000 });
         return res.data.choices[0].message.content;
       } catch (err: any) {
         const status = err.response?.status;
@@ -144,7 +165,7 @@ async function callAI(provider: string, apiKey: string, model: string, instructi
   // Gemini with retry
   for (let attempt = 1; attempt <= 3; attempt++) {
     try {
-      const res = await axios.post(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`, { system_instruction: { parts: [{ text: instructions }] }, contents: [{ parts: [{ text: userMsg }] }], generationConfig: { temperature: 0.4, maxOutputTokens: 8000 } }, { headers: { "Content-Type": "application/json" }, timeout: 180_000 });
+      const res = await axios.post(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`, { system_instruction: { parts: [{ text: instructions }] }, contents: [{ parts: [{ text: userMsg }] }], generationConfig: { temperature: 0.4, maxOutputTokens: 16000 } }, { headers: { "Content-Type": "application/json" }, timeout: 240_000 });
       const c = res.data.candidates;
       if (!c || c.length === 0) throw new Error("No candidates");
       return c[0].content.parts.map((p: any) => p.text).join("");
@@ -277,7 +298,7 @@ async function main() {
     const exportData = {
       exported_at: new Date().toISOString(),
       athlete: { id: athlete.id, firstname: athlete.firstname, lastname: athlete.lastname },
-      activity_summary: { id: enriched.activity.id, name: enriched.activity.name, sport_type: enriched.activity.sport_type || enriched.activity.type, date: enriched.activity.start_date_local, distance_km: Math.round(enriched.activity.distance / 10) / 100, moving_time_seconds: enriched.activity.moving_time, elapsed_time_seconds: enriched.activity.elapsed_time, total_elevation_gain_m: enriched.activity.total_elevation_gain, average_speed_kmh: Math.round(enriched.activity.average_speed * 3.6 * 100) / 100, max_speed_kmh: Math.round(enriched.activity.max_speed * 3.6 * 100) / 100, average_heartrate: enriched.activity.average_heartrate || null, max_heartrate: enriched.activity.max_heartrate || null, average_watts: enriched.activity.average_watts || null, max_watts: enriched.activity.max_watts || null, average_cadence: enriched.activity.average_cadence || null, calories: enriched.activity.calories || null, suffer_score: enriched.activity.suffer_score || null, gear: enriched.activity.gear?.name || null, device: enriched.activity.device_name || null },
+      activity_summary: { id: enriched.activity.id, name: enriched.activity.name, sport_type: enriched.activity.sport_type || enriched.activity.type, date: enriched.activity.start_date_local, distance_km: Math.round(enriched.activity.distance / 10) / 100, moving_time_seconds: enriched.activity.moving_time, elapsed_time_seconds: enriched.activity.elapsed_time, total_elevation_gain_m: enriched.activity.total_elevation_gain, average_speed_kmh: Math.round(enriched.activity.average_speed * 3.6 * 100) / 100, max_speed_kmh: Math.round(enriched.activity.max_speed * 3.6 * 100) / 100, average_heartrate: enriched.activity.average_heartrate || null, max_heartrate: enriched.activity.max_heartrate || null, average_watts: enriched.activity.average_watts || null, max_watts: enriched.activity.max_watts || null, average_cadence: enriched.activity.average_cadence || null, calories: enriched.activity.calories || null, suffer_score: enriched.activity.suffer_score || null, gear: enriched.activity.gear?.name || null, device: enriched.activity.device_name || null, device_watts: enriched.activity.device_watts ?? null },
       detailed_activity: enriched.activity, laps: enriched.laps, zones: enriched.zones,
       splits_metric: enriched.activity.splits_metric || [], splits_standard: enriched.activity.splits_standard || [],
       segment_efforts: enriched.activity.segment_efforts || [], best_efforts: enriched.activity.best_efforts || [],
@@ -295,7 +316,11 @@ async function main() {
     console.log(`  🔬 STEP 2/4: Crunching ${streamTable.length} data points...`);
     console.log(`${"═".repeat(60)}\n`);
 
-    const crunched = crunchActivity(exportData, rider);
+    // Load wellness early so garminRestHr is available for crunch (improves VO2max accuracy)
+    const wellnessCtx = loadWellnessContext(ANALYSIS_DIR, dateStr);
+    const garminRestHr = wellnessCtx?.night_before?.resting_hr ?? null;
+
+    const crunched = crunchActivity(exportData, rider, garminRestHr);
     if (!existsSync(ANALYSIS_DIR)) mkdirSync(ANALYSIS_DIR, { recursive: true });
     const crunchedPath = join(ANALYSIS_DIR, `activity_${activityId}_${dateStr}_${safeName}_crunched.json`);
     writeFileSync(crunchedPath, JSON.stringify(crunched, null, 2), "utf-8");
@@ -309,13 +334,42 @@ async function main() {
     const aiConfigs = loadAIConfig();
     let analysisText: string | null = null;
 
+    // Always load enrichment context (used for AI payload AND no-AI fallback in Strava description)
+    const allSummaries = loadAllSummaries(ANALYSIS_DIR);
+    const sport = groupSport(crunched.summary_card?.type ?? "Unknown");
+    const historicalCtx = buildHistoricalContext(allSummaries, dateStr, sport);
+    // wellnessCtx already loaded above
+    const summaryForPR = extractSummary(crunched, `activity_${activityId}_${dateStr}_${safeName}_crunched.json`);
+    const prCheck = summaryForPR ? checkPRs(allSummaries, summaryForPR) : null;
+
+    if (historicalCtx) {
+      console.log(`   📈 Historical: ${historicalCtx.baselines.length} period(s) loaded`);
+    } else {
+      console.log(`   💡 No historical baseline — run 'npm run bulk' to enable context-aware analysis`);
+    }
+    if (wellnessCtx) {
+      console.log(`   🛌 Garmin wellness: ${wellnessCtx.readiness_note}`);
+    } else {
+      console.log(`   💡 No Garmin data — run 'python garmin_sync.py' to enable readiness context`);
+    }
+    if (prCheck && prCheck.pr_labels.length > 0) {
+      console.log(`   🏅 NEW PRs: ${prCheck.pr_labels.join(" | ")}`);
+    }
+
     if (aiConfigs) {
       console.log(`\n${"═".repeat(60)}`);
       console.log(`  🤖 STEP 3/4: AI analysis (${aiConfigs.map(c => c.provider.toUpperCase()).join(" → ")})...`);
       console.log(`${"═".repeat(60)}\n`);
 
       const instructions = getInstructions();
-      const data = JSON.stringify(crunched);
+
+      const payload = {
+        activity_data: crunched,
+        ...(historicalCtx ? { historical_context: historicalCtx } : {}),
+        ...(wellnessCtx ? { garmin_wellness: wellnessCtx } : {}),
+        ...(prCheck && prCheck.pr_labels.length > 0 ? { personal_records_broken: prCheck } : {}),
+      };
+      const data = JSON.stringify(payload, (_, v) => v === null ? undefined : v);
       const approxInputTokens = Math.round((instructions.length + data.length) / 4);
       console.log(`   📊 Input: ~${approxInputTokens.toLocaleString()} tokens (instructions: ${Math.round(instructions.length / 4).toLocaleString()} + data: ${Math.round(data.length / 4).toLocaleString()})\n`);
 
@@ -350,8 +404,8 @@ async function main() {
     console.log(`  📤 STEP 4/4: Updating Strava activity...`);
     console.log(`${"═".repeat(60)}\n`);
 
-    const description = buildDescription(crunched, analysisText);
-    const privateNotes = buildPrivateNotes(crunched, analysisText);
+    const description = buildDescription(crunched, analysisText, historicalCtx, wellnessCtx);
+    const privateNotes = buildPrivateNotes(crunched, analysisText, wellnessCtx);
 
     try {
       await client.put(`/activities/${activityId}`, { description, private_note: privateNotes });

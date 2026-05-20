@@ -326,6 +326,7 @@ async function main() {
           suffer_score: enriched.activity.suffer_score || null,
           gear: enriched.activity.gear?.name || null,
           device: enriched.activity.device_name || null,
+          device_watts: enriched.activity.device_watts ?? null,
         },
         detailed_activity: enriched.activity,
         laps: enriched.laps,

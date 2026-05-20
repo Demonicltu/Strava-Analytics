@@ -1,10 +1,12 @@
 /**
  * Shared formatting module — build Strava description and private notes.
  * Used by both update_strava.ts and fast.ts.
- *
+ *ay
  * Description (public) = EVERYTHING (Pogačar Score + Summary + Verdict + Full Analysis)
  * Private Notes (private, mobile-friendly) = SHORT (Tips + Key Stats)
  */
+import type { WellnessContext } from "./wellness.js";
+import type { PeriodBaseline } from "./summary_utils.js";
 
 /**
  * Extract a section's content from AI analysis markdown by header keyword.
@@ -16,9 +18,10 @@ export function extractSection(markdown: string, keyword: string): string | null
   let capturing = false;
   let captureLevel = 0; // number of # in the header that started capture
   const result: string[] = [];
+  const keywordLower = keyword.toLowerCase();
   for (const line of lines) {
     const headerMatch = line.match(/^(#{1,6})\s/);
-    if (headerMatch && line.includes(keyword) && !capturing) {
+    if (headerMatch && line.toLowerCase().includes(keywordLower) && !capturing) {
       capturing = true;
       captureLevel = headerMatch[1].length;
       continue;
@@ -85,7 +88,9 @@ function formatTablesForPlainText(text: string): string {
           result.push(`  ${row[0]}: ${row[1] || ""}`);
         }
       } else {
-        // 3+ columns: compact lines with │ separator (visually clear in proportional font)
+        // 3+ columns: emit header row, a divider, then data rows
+        result.push(`  ${headers.join(" │ ")}`);
+        result.push(`  ${"─".repeat(headers.join(" │ ").length)}`);
         for (const row of rows) {
           result.push(`  ${row.join(" │ ")}`);
         }
@@ -129,7 +134,7 @@ function activityLabel(cat: ActivityCategory): { summary: string; emoji: string;
  * Build description (public, visible to followers).
  * Adapts labels to activity type (ride/run/walk).
  */
-export function buildDescription(crunched: any, analysisText: string | null): string {
+export function buildDescription(crunched: any, analysisText: string | null, historicalCtx?: any, wellnessCtx?: WellnessContext | null): string {
   const lines: string[] = [];
   const cat = categorize(crunched.summary_card?.type);
   const label = activityLabel(cat);
@@ -399,20 +404,9 @@ export function buildDescription(crunched: any, analysisText: string | null): st
         if (g.pct > 0) lines.push(`  ${g.label}: ${g.pct}%`);
       }
     }
-
-    // Segment highlights
-    const segs = crunched.segments_summary?.highlight_table;
-    if (segs?.length) {
-      lines.push(``);
-      lines.push(`🏅 TOP SEGMENTS`);
-      for (const s of segs) {
-        const pr = s.pr ? ` ${s.pr}` : ``;
-        lines.push(`  ${s.name} — ${s.distance} in ${s.time} @ ${s.avg_hr} bpm${pr}`);
-      }
-    }
   }
 
-  // ─── Weather & Wind (built from crunched data — not AI text, avoids header-level parsing issues) ───
+  // ─── Weather & Wind (always present when available — before segments) ───
   const meteo = crunched.meteorology;
   if (meteo) {
     lines.push(``);
@@ -433,8 +427,8 @@ export function buildDescription(crunched: any, analysisText: string | null): st
       lines.push(``);
       lines.push(`  Wind Impact:`);
       lines.push(`  ${wind.headwind_pct}% headwind · ${wind.tailwind_pct}% tailwind · ${wind.crosswind_pct}% crosswind`);
-      const netStr = wind.net_wind_effect_kmh != null ? ` (net ${wind.net_wind_effect_kmh > 0 ? "+" : ""}${wind.net_wind_effect_kmh} km/h)` : ``;
-      lines.push(`  ${wind.net_wind_label}${netStr}`);
+      const netStr = wind.headwind_exposure_kmh != null ? ` (net ${wind.headwind_exposure_kmh > 0 ? "+" : ""}${wind.headwind_exposure_kmh} km/h)` : ``;
+      lines.push(`  ${wind.headwind_label ?? ""}${netStr}`);
       if (wind.by_segment && wind.by_segment.length > 1) {
         const snapshots: any[] = crunched.meteorology?.snapshots ?? [];
         const offsetHours: number = crunched.summary_card?.local_utc_offset_hours ?? 0;
@@ -445,9 +439,22 @@ export function buildDescription(crunched: any, analysisText: string | null): st
             const localHour = (new Date(snap.utc_time).getUTCHours() + offsetHours + 24) % 24;
             timeLabel = `${localHour}:00`;
           }
-          const netStr = seg.net_kmh != null ? `, net ${seg.net_kmh > 0 ? "+" : ""}${seg.net_kmh} km/h` : "";
-          lines.push(`    ${timeLabel}: ${seg.wind_speed_kmh} km/h ${seg.wind_direction_cardinal ?? ""} → ${seg.headwind_pct}% head / ${seg.tailwind_pct}% tail${netStr}`);
+          const netStr2 = seg.net_kmh != null ? `, net ${seg.net_kmh > 0 ? "+" : ""}${seg.net_kmh} km/h` : "";
+          lines.push(`    ${timeLabel}: ${seg.wind_speed_kmh} km/h ${seg.wind_direction_cardinal ?? ""} → ${seg.headwind_pct}% head / ${seg.tailwind_pct}% tail${netStr2}`);
         }
+      }
+    }
+  }
+
+  // ─── No-AI fallback: Segment highlights (after weather) ───
+  if (!analysisText) {
+    const segs = crunched.segments_summary?.highlight_table;
+    if (segs?.length) {
+      lines.push(``);
+      lines.push(`🏅 TOP SEGMENTS`);
+      for (const s of segs) {
+        const pr = s.pr ? ` ${s.pr}` : ``;
+        lines.push(`  ${s.name} — ${s.distance} in ${s.time} @ ${s.avg_hr} bpm${pr}`);
       }
     }
   }
@@ -461,22 +468,22 @@ export function buildDescription(crunched: any, analysisText: string | null): st
       { keyword: "Training Load", emoji: "🏋️" },
       { keyword: "Temperature", emoji: "🌡️" },
     ] : cat === "workout" ? [
-      { keyword: "Heart Rate", emoji: "❤️" },
       { keyword: "Training Load", emoji: "🏋️" },
+      { keyword: "Heart Rate", emoji: "❤️" },
       { keyword: "Workout Analysis", emoji: "🏋️" },
       { keyword: "Effort Intervals", emoji: "⚡" },
       { keyword: "Cadence", emoji: "🔄" },
     ] : [
-      { keyword: "Pacing", emoji: "📈" },
+      { keyword: "Training Load", emoji: "🏋️" },
       { keyword: "Heart Rate", emoji: "❤️" },
       { keyword: "Power Analysis", emoji: "⚡" },
-      { keyword: "Training Load", emoji: "🏋️" },
       { keyword: "Power-to-Weight", emoji: "💪" },
-      { keyword: "Climbing", emoji: "⛰️" },
-      { keyword: "Cadence", emoji: "🔄" },
-      { keyword: "Gradient", emoji: "📐" },
-      { keyword: "VAM", emoji: "🧗" },
       { keyword: "Torque", emoji: "🔧" },
+      { keyword: "Cadence", emoji: "🔄" },
+      // { keyword: "VAM", emoji: "🧗" },
+      { keyword: "Climbing", emoji: "⛰️" },
+      { keyword: "Gradient", emoji: "📐" },
+      { keyword: "Pacing", emoji: "📈" },
       { keyword: "Segment", emoji: "🏅" },
     ];
     for (const sec of sections) {
@@ -489,6 +496,59 @@ export function buildDescription(crunched: any, analysisText: string | null): st
     }
   }
 
+
+  // ─── Historical Context (from AI, or fallback from raw data) ───
+  if (analysisText) {
+    const hist = extractSection(analysisText, "Historical Context");
+    if (hist) {
+      lines.push(``);
+      lines.push(`📈 HISTORICAL CONTEXT`);
+      lines.push(formatTablesForPlainText(hist.trim()));
+    }
+  } else if (historicalCtx?.baselines?.length) {
+    lines.push(``);
+    lines.push(`📈 HISTORICAL CONTEXT (${historicalCtx.sport})`);
+    for (const b of historicalCtx.baselines as PeriodBaseline[]) {
+      const parts: string[] = [`${b.period_label} (${b.activity_count} activities)`];
+      if (b.total_distance_km != null) parts.push(`${b.total_distance_km} km total`);
+      if (b.weekly_avg_distance_km != null) parts.push(`${b.weekly_avg_distance_km} km/wk avg`);
+      if (b.avg_normalized_power_w != null) parts.push(`NP ${b.avg_normalized_power_w} W avg`);
+      if (b.avg_tss != null) parts.push(`TSS ${b.avg_tss} avg`);
+      if (b.avg_efficiency_factor != null) parts.push(`EF ${b.avg_efficiency_factor}`);
+      lines.push(`  ${parts.join(" · ")}`);
+    }
+  }
+
+  // ─── Readiness & Recovery / Garmin (from AI, or fallback from raw data) ───
+  if (analysisText) {
+    const readiness = extractSection(analysisText, "Readiness");
+    if (readiness) {
+      lines.push(``);
+      lines.push(`🛌 READINESS`);
+      lines.push(formatTablesForPlainText(readiness.trim()));
+    }
+  } else if (wellnessCtx) {
+    const n = wellnessCtx.night_before;
+    const d = wellnessCtx.day_of;
+    lines.push(``);
+    lines.push(`🛌 READINESS (Garmin)`);
+    if (n?.training_readiness_score != null) {
+      const level = n.training_readiness_level ? ` (${n.training_readiness_level})` : ``;
+      lines.push(`  🎯 Training Readiness: ${n.training_readiness_score}/100${level}`);
+    }
+    if (n?.sleep_score != null) {
+      const dur = n.sleep_duration_h != null ? ` — ${n.sleep_duration_h}h` : ``;
+      lines.push(`  💤 Sleep: ${n.sleep_score}/100${dur}`);
+    }
+    if (n?.hrv_last_5_min != null) {
+      const vs = n.hrv_vs_baseline != null ? ` (${n.hrv_vs_baseline > 0 ? "+" : ""}${n.hrv_vs_baseline} vs 7d avg)` : ``;
+      const status = n.hrv_status ? ` — ${n.hrv_status}` : ``;
+      lines.push(`  📡 HRV: ${n.hrv_last_5_min} ms${vs}${status}`);
+    }
+    if (n?.resting_hr != null) lines.push(`  ❤️ Resting HR: ${n.resting_hr} bpm`);
+    const bb = d?.body_battery_at_start ?? n?.body_battery_start ?? null;
+    if (bb != null) lines.push(`  🔋 Body Battery at start: ${bb}/100`);
+  }
 
   // PRs mention
   if (crunched.segments_summary?.prs > 0) {
@@ -507,7 +567,7 @@ export function buildDescription(crunched: any, analysisText: string | null): st
  * SHORT format: Actionable Tips (training-focused only) + key one-liner stats.
  * Designed to be readable on mobile. No duplication of description content.
  */
-export function buildPrivateNotes(crunched: any, analysisText: string | null): string {
+export function buildPrivateNotes(crunched: any, analysisText: string | null, wellnessCtx?: WellnessContext | null): string {
   const lines: string[] = [];
 
   // 1. Actionable Tips from AI — filter out segment/PR tips (already in description)
@@ -583,8 +643,8 @@ export function buildPrivateNotes(crunched: any, analysisText: string | null): s
   // Wind summary
   const wind = crunched.meteorology?.wind_analysis;
   if (wind) {
-    const netStr = wind.net_wind_effect_kmh != null ? ` | net ${wind.net_wind_effect_kmh > 0 ? "+" : ""}${wind.net_wind_effect_kmh} km/h` : "";
-    lines.push(`Wind: ${wind.headwind_pct}% head · ${wind.tailwind_pct}% tail · ${wind.crosswind_pct}% cross${netStr} (${wind.net_wind_label})`);
+    const netStr = wind.headwind_exposure_kmh != null ? ` | net ${wind.headwind_exposure_kmh > 0 ? "+" : ""}${wind.headwind_exposure_kmh} km/h` : "";
+    lines.push(`Wind: ${wind.headwind_pct}% head · ${wind.tailwind_pct}% tail · ${wind.crosswind_pct}% cross${netStr} (${wind.headwind_label ?? ""})`);
   }
 
 
@@ -597,9 +657,14 @@ export function buildPrivateNotes(crunched: any, analysisText: string | null): s
       lines.push(`💡 Cadence low (${crunched.cadence.stats.avg} ${unit}) — ${tip}`);
     }
     if (crunched.heart_rate?.cardiac_drift?.drift_bpm > 5) lines.push(`💡 HR drift +${crunched.heart_rate.cardiac_drift.drift_bpm}bpm — start easier`);
+
+    // Garmin readiness fallback in private notes
+    if (wellnessCtx) {
+      lines.push(``);
+      lines.push(`🛌 READINESS`);
+      lines.push(wellnessCtx.readiness_note);
+    }
   }
 
   return lines.join("\n");
 }
-
-

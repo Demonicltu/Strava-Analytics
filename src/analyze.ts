@@ -3,11 +3,34 @@ import { readFileSync, writeFileSync, readdirSync, existsSync } from "fs";
 import { join, dirname } from "path";
 import { fileURLToPath } from "url";
 import "dotenv/config";
+import { loadAllSummaries, buildHistoricalContext, groupSport, extractSummary, checkPRs } from "./summary_utils.js";
+import { loadWellnessContext } from "./wellness.js";
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
-const ANALYSIS_DIR = join(__dirname, "..", "analysis");
-const INSTRUCTIONS_PATH = join(__dirname, "..", "AI_ANALYSIS_INSTRUCTIONS.md");
+let __dirname2: string;
+try { __dirname2 = dirname(fileURLToPath(import.meta.url)); } catch { __dirname2 = process.cwd(); }
+const BASE_DIR = existsSync(join(__dirname2, "..", "package.json")) ? join(__dirname2, "..") : process.cwd();
+const ANALYSIS_DIR = join(BASE_DIR, "analysis");
+const INSTRUCTIONS_PATH = join(BASE_DIR, "AI_ANALYSIS_INSTRUCTIONS.md");
+
+// ─── Helpers ───
+
+/**
+ * Compact whitespace in markdown without breaking structure.
+ * Outside fenced code blocks: collapse 2+ spaces → 1, strip trailing ws,
+ * collapse 3+ blank lines → 2. Code fences preserved verbatim.
+ */
+function compactMarkdown(text: string): string {
+  if (!text) return text;
+  const lines = text.split("\n");
+  const out: string[] = [];
+  let inFence = false;
+  for (const line of lines) {
+    if (/^\s*```/.test(line)) { inFence = !inFence; out.push(line.replace(/[ \t]+$/, "")); continue; }
+    if (inFence) { out.push(line); continue; }
+    out.push(line.replace(/  +/g, " ").replace(/[ \t]+$/, ""));
+  }
+  return out.join("\n").replace(/\n{3,}/g, "\n\n");
+}
 
 // ─── Config ───
 
@@ -55,7 +78,24 @@ function sanitizeAIOutput(text: string): string {
   const secondIdx = firstIdx >= 0 ? cleaned.indexOf(marker, firstIdx + 1) : -1;
   if (secondIdx > 0) cleaned = cleaned.substring(0, secondIdx).trimEnd();
   return cleaned;
-}// ─── Helpers ───
+}// ─── Historical context ───
+
+function loadHistoricalContext(selectedFile: string, crunchedData: string): object | null {
+  try {
+    const raw = JSON.parse(crunchedData);
+    const sport_raw: string = raw.summary_card?.type ?? "Unknown";
+    const sport = groupSport(sport_raw);
+    const fileDate = selectedFile.match(/_(\d{4}-\d{2}-\d{2})_/);
+    if (!fileDate) return null;
+    const activityDate = fileDate[1];
+    const allSummaries = loadAllSummaries(ANALYSIS_DIR);
+    return buildHistoricalContext(allSummaries, activityDate, sport);
+  } catch {
+    return null;
+  }
+}
+
+// ─── Helpers ───
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -98,8 +138,8 @@ async function analyzeWithOpenAICompatible(provider: string, apiKey: string, mod
           { role: "user", content: `Write the full activity analysis based on this pre-computed data. All math is done — just interpret and write:\n\n${data}` },
         ],
         temperature: 0.4,
-        max_tokens: 8000,
-      }, { headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" }, timeout: 180_000 });
+        max_tokens: 16000,
+      }, { headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" }, timeout: 240_000 });
       return res.data.choices[0].message.content;
     } catch (err: any) {
       const status = err.response?.status;
@@ -155,7 +195,7 @@ async function analyzeWithGemini(apiKey: string, model: string, instructions: st
         {
           system_instruction: { parts: [{ text: instructions }] },
           contents: [{ parts: [{ text: `Write the full activity analysis based on this pre-computed data. All math is done — just interpret and write:\n\n${data}` }] }],
-          generationConfig: { temperature: 0.4, maxOutputTokens: 8000 },
+          generationConfig: { temperature: 0.4, maxOutputTokens: 16000 },
         },
         { headers: { "Content-Type": "application/json" }, timeout: 180_000 }
       );
@@ -192,7 +232,7 @@ async function main() {
 
   // Load instructions
   if (!existsSync(INSTRUCTIONS_PATH)) { console.error("❌ AI_ANALYSIS_INSTRUCTIONS.md not found!"); process.exit(1); }
-  const instructions = readFileSync(INSTRUCTIONS_PATH, "utf-8");
+  const instructions = compactMarkdown(readFileSync(INSTRUCTIONS_PATH, "utf-8"));
 
   // Find crunched files
   if (!existsSync(ANALYSIS_DIR)) { console.error("❌ No analysis/ directory. Run 'npm run crunch' first."); process.exit(1); }
@@ -225,10 +265,52 @@ async function main() {
   console.log(`   Size: ${formatFileSize(crunchedData.length)} (~${tokens.toLocaleString()} tokens)`);
   console.log(`   ✅ Pre-computed data — no sampling, all math done`);
 
+  // Historical context enrichment
+  const historicalCtx = loadHistoricalContext(selectedFile, crunchedData);
+  let payload: string;
+
+  // PR check
+  const allSummariesForPR = loadAllSummaries(ANALYSIS_DIR);
+  const rawForPR = JSON.parse(crunchedData);
+  const summaryForPR = extractSummary(rawForPR, selectedFile);
+  const prCheck = summaryForPR ? checkPRs(allSummariesForPR, summaryForPR) : null;
+  if (prCheck && prCheck.pr_labels.length > 0) {
+    console.log(`   🏅 NEW PRs detected: ${prCheck.pr_labels.join(" | ")}`);
+  }
+
+  // Wellness context (Garmin)
+  const fileDate = selectedFile.match(/_(\d{4}-\d{2}-\d{2})_/);
+  const actDate = fileDate ? fileDate[1] : null;
+  const wellnessCtx = actDate ? loadWellnessContext(ANALYSIS_DIR, actDate) : null;
+
+  if (historicalCtx) {
+    const ctx = historicalCtx as any;
+    const periodCount = ctx.baselines?.length ?? 0;
+    console.log(`   📈 Historical baseline: ${periodCount} period(s) for ${ctx.sport} (${ctx.baselines?.map((b: any) => b.period_label).join(", ")})`);
+  } else {
+    console.log(`   💡 No historical baseline — run 'npm run bulk' to enable context-aware analysis`);
+  }
+
+  if (wellnessCtx) {
+    console.log(`   🛌 Garmin wellness: ${wellnessCtx.readiness_note}`);
+  } else {
+    console.log(`   💡 No Garmin wellness data — run 'python garmin_sync.py' to enable readiness context`);
+  }
+
+  payload = JSON.stringify(
+    {
+      activity_data: JSON.parse(crunchedData),
+      ...(historicalCtx ? { historical_context: historicalCtx } : {}),
+      ...(wellnessCtx ? { garmin_wellness: wellnessCtx } : {}),
+      ...(prCheck && prCheck.pr_labels.length > 0 ? { personal_records_broken: prCheck } : {}),
+    },
+    (_, v) => v === null ? undefined : v,
+  );
+
   // Send to AI (with automatic fallback)
   let analysis: string;
   try {
-    const result = await analyzeWithFallback(configs, instructions, crunchedData);
+    const result = await analyzeWithFallback(configs, instructions, payload);
     analysis = sanitizeAIOutput(result.analysis);
     console.log(`   ✅ Generated by ${result.provider.toUpperCase()} (${result.model})`);
   } catch (err: any) {

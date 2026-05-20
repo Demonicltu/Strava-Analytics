@@ -13,16 +13,27 @@
 
 ```
 Strava API  →  Download  →  Crunch (30+ metrics)  →  AI Analysis  →  Push to Strava
-                                                                      ↓
-                                                              Description (public)
-                                                              Private Notes (mobile)
+                                                           ↓
+                                               Historical baselines (7d/30d/90d/365d)
+                                               Garmin wellness (HRV/sleep/Body Battery)
+                                               Personal records check
+                                                           ↓
+                                                   Description (public)
+                                                   Private Notes (mobile)
 ```
 
 Pick an activity, and the tool will:
 1. **Download** all data from Strava (details, laps, zones, second-by-second streams, segments)
 2. **Crunch** every data point locally — zero sampling, zero cloud processing
-3. **Analyze** via AI (Gemini, Groq, OpenRouter, or OpenAI) for a written performance report
+3. **Analyze** via AI — enriched with historical baselines, Garmin readiness data, and PR detection
 4. **Push** the analysis back to your Strava activity description + private notes
+
+Beyond single-activity analysis, the tool also provides:
+- 📅 **Weekly digest** — multi-week Sunday review with overtraining warning + race predictions
+- 📊 **Trend comparison** — AI-written fitness trend report across any time window
+- 🏅 **Personal records tracker** — all-time PRs auto-detected, flagged when broken
+- 📈 **HTML dashboard** — static Chart.js dashboard covering all activities (no server needed)
+- 🛌 **Garmin Connect sync** — HRV, sleep, Body Battery, training status pulled automatically
 
 ---
 
@@ -31,11 +42,24 @@ Pick an activity, and the tool will:
 ```bash
 cd strava-extractor
 npm install
-cp .env.example .env   # fill in your Strava credentials
+cp .env.example .env   # fill in your Strava credentials + at least one AI key
 npm run fast            # that's it — pick an activity and go
 ```
 
-> See the **[User Guide](USER_GUIDE.md)** for full setup instructions including Strava API setup, OAuth flow, and `.env` configuration.
+**For historical context + trend analysis (recommended):**
+```bash
+npm run bulk    # backfill 2 years of Strava history
+npm run records # compute all-time personal records
+```
+
+**For Garmin readiness data (optional, requires Garmin account):**
+```bash
+pip install -r requirements.txt
+# Add GARMIN_EMAIL, GARMIN_PASSWORD, GARMIN_SINCE to .env
+npm run garmin
+```
+
+> See **[COMMANDS.md](COMMANDS.md)** for full setup instructions including Strava API setup, OAuth flow, and `.env` configuration.
 
 ---
 
@@ -62,8 +86,14 @@ All **outdoor** activities (GPS present) additionally get: **Meteorology** (temp
 | **`npm run fast`** | ⚡ **All-in-one** — download → crunch → AI → push to Strava |
 | `npm start` | Download activity data from Strava |
 | `npm run crunch` | Compute all metrics locally |
-| `npm run analyze` | Send to AI for written analysis |
+| `npm run analyze` | Send to AI for written analysis (+ history + Garmin + PR check) |
 | `npm run update` | Push analysis to Strava description + notes |
+| **`npm run bulk`** | ⏳ Fetch & crunch last 2 years of Strava history (no AI — enables historical context) |
+| **`npm run compare`** | 📊 AI fitness trend analysis across any time window |
+| **`npm run digest`** | 📅 Weekly/monthly digest — overtraining warning, race predictions, training adherence |
+| **`npm run records`** | 🏅 Detect all-time personal records, flag newly broken ones |
+| **`npm run dashboard`** | 📈 Generate static `dashboard.html` with Chart.js graphs |
+| **`npm run garmin`** | 🛌 Sync Garmin Connect wellness data (HRV, sleep, Body Battery, training status) |
 
 > `npm run fast` loops — after updating one activity, it returns to the activity list. Press `q` to quit.
 
@@ -126,11 +156,16 @@ All metrics are computed locally from raw stream data. No sampling — every dat
 
 ```
 strava-extractor/
-├── output/                              # Raw Strava data
-│   └── activity_<id>_<date>_<name>.json    (1-5 MB per activity)
-├── analysis/                            # Processed results
-│   ├── *_crunched.json                     (10-40 KB — all metrics)
-│   └── *_analysis.md                       (AI-written report)
+├── dashboard.html                           # Static HTML dashboard (open in browser)
+├── output/                                  # Raw Strava data
+│   └── activity_<id>_<date>_<name>.json        (1-5 MB per activity)
+├── analysis/                                # Processed results
+│   ├── *_crunched.json                         (10-40 KB — all metrics, zero sampling)
+│   ├── *_analysis.md                           (AI-written single-activity report)
+│   ├── comparison_<period>_<date>.md           (AI trend report — npm run compare)
+│   ├── digest_<weeks>w_<date>.md               (AI weekly digest — npm run digest)
+│   ├── personal_records.json                   (All-time PRs — npm run records)
+│   └── garmin_wellness.json                    (Garmin daily wellness database)
 ```
 
 ---
@@ -192,9 +227,11 @@ Strava API: **100 requests / 15 min**, **1,000 / day**. Each activity ≈ 4 API 
 
 | Doc | Contents |
 |-----|----------|
-| **[USER_GUIDE.md](USER_GUIDE.md)** | Full setup guide — Strava API, OAuth, `.env`, usage |
-| **[COMMANDS.md](COMMANDS.md)** | Quick reference — all commands with examples |
+| **[COMMANDS.md](COMMANDS.md)** | Full user guide — setup, all commands with examples, workflow, tips |
 | **[METRICS.md](METRICS.md)** | Every metric explained with interpretation tables |
+| **[AI_ANALYSIS_INSTRUCTIONS.md](AI_ANALYSIS_INSTRUCTIONS.md)** | Format instructions for single-activity AI report |
+| **[AI_COMPARE_INSTRUCTIONS.md](AI_COMPARE_INSTRUCTIONS.md)** | Format instructions for trend comparison report |
+| **[AI_DIGEST_INSTRUCTIONS.md](AI_DIGEST_INSTRUCTIONS.md)** | Format instructions for weekly digest report |
 
 ---
 
@@ -205,3 +242,4 @@ Strava API: **100 requests / 15 min**, **1,000 / day**. Each activity ≈ 4 API 
 - **Zero sampling** — processes every stream data point
 - **Bundleable** — single-file portable build via esbuild
 - **Open-Meteo** — free weather API, no key required; 1 call per UTC hour spanned
+- **garminconnect** (Python, optional) — unofficial Garmin Connect API for wellness sync

@@ -71,7 +71,7 @@ export function bestRollingAvg(values: number[], windowSec: number): number | nu
 
 // ─── Main crunch function ───
 
-export function crunchActivity(raw: any, rider: RiderConfig): any {
+export function crunchActivity(raw: any, rider: RiderConfig, garminRestHr?: number | null): any {
   const summary = raw.activity_summary;
   const splits = raw.splits_metric || [];
   const segments = raw.segment_efforts || [];
@@ -97,7 +97,7 @@ export function crunchActivity(raw: any, rider: RiderConfig): any {
   const isSurf = summary.sport_type === "Surfing";
   const isWorkout = ["Workout", "WeightTraining", "CrossFit", "Crossfit", "HIIT", "Yoga", "Pilates", "Rowing", "Elliptical", "StairStepper"].includes(summary.sport_type);
   const isVirtual = summary.sport_type === "VirtualRide";
-  const hasPowerMeter = powerValues.length > 100;
+  const hasPowerMeter = summary.device_watts === true || (summary.device_watts == null && powerValues.length > 100);
   const elev = summary.total_elevation_gain_m || 0;
   const avgHR = summary.average_heartrate || 0;
 
@@ -111,8 +111,8 @@ export function crunchActivity(raw: any, rider: RiderConfig): any {
     ? (rider.runnerLthr || rider.lthr || null)
     : (rider.lthr || null);
 
-  // Rest HR: from env, or default 60 bpm
-  const effectiveRestHr = rider.restHr || 60;
+  // Rest HR: Garmin per-day (most accurate) → .env RIDER_REST_HR → null (disables HR-based VO2max if unknown)
+  const effectiveRestHr = garminRestHr ?? rider.restHr ?? null;
 
   // ═══ Normalized Power (computed early — needed for Pogačar EF metric) ═══
   let normalizedPower: number | null = null;
@@ -135,39 +135,53 @@ export function crunchActivity(raw: any, rider: RiderConfig): any {
     else { speedRef = 34; refLabel = "Solo Training"; }
 
     const metrics: any = {};
-    let total = 0, count = 0;
-    if (!isVirtual && summary.average_speed_kmh > 0) {
-      const pct = round(summary.average_speed_kmh / speedRef * 100);
-      metrics.speed = `${summary.average_speed_kmh} / ${speedRef} km/h → ${pct}%`;
-      total += pct; count++;
-    }
+    // Weighted composite: primary metric = 50%, secondaries share remaining 50%
+    let primaryPct: number | null = null;
+    const secondaryPcts: number[] = [];
+
     if (hasPowerMeter && summary.average_watts) {
-      const pct = round(summary.average_watts / 440 * 100);
-      metrics.power = `${Math.round(summary.average_watts)} / 440 W → ${pct}%`;
-      total += pct; count++;
+      // Power available → power is primary (50%)
+      primaryPct = round(summary.average_watts / 440 * 100);
+      metrics.power = `${Math.round(summary.average_watts)} / 440 W → ${primaryPct}%`;
+      // Speed shown as secondary when power is primary
+      if (!isVirtual && summary.average_speed_kmh > 0) {
+        const pct = round(summary.average_speed_kmh / speedRef * 100);
+        metrics.speed = `${summary.average_speed_kmh} / ${speedRef} km/h → ${pct}%`;
+        secondaryPcts.push(pct);
+      }
+    } else if (!isVirtual && summary.average_speed_kmh > 0) {
+      // No power → speed is primary (50%)
+      primaryPct = round(summary.average_speed_kmh / speedRef * 100);
+      metrics.speed = `${summary.average_speed_kmh} / ${speedRef} km/h → ${primaryPct}%`;
     }
-    // Efficiency Factor: NP/avgHR — how much power per heartbeat (output metric, not effort)
-    // Pogačar reference: ~440W NP / ~170 avg HR ≈ 2.6 W/bpm
+    // Efficiency Factor: NP/avgHR — Pogačar reference ~440W / ~150 avg HR ≈ 2.9 W/bpm (grand tour avg HR, rough estimate)
     if (normalizedPower && avgHR > 0) {
       const ef = round(normalizedPower / avgHR, 2);
-      const pogacarEf = 2.6;
+      const pogacarEf = 2.9;
       const pct = round(ef / pogacarEf * 100);
-      metrics.efficiency = `${ef} / ${pogacarEf} W/bpm → ${pct}%`;
-      total += pct; count++;
+      metrics.efficiency = `${ef} / ${pogacarEf} W/bpm → ${pct}% (rough estimate)`;
+      secondaryPcts.push(pct);
     }
     if (elev > 200 && summary.moving_time_seconds > 0) {
       const vam = round(elev / (summary.moving_time_seconds / 3600));
       const pogacarVam = 1900;
       const pct = round(vam / pogacarVam * 100);
       metrics.climbing = `${vam} / ${pogacarVam} VAM → ${pct}%`;
-      total += pct; count++;
+      secondaryPcts.push(pct);
     }
     if (summary.average_cadence) {
       const pct = round(summary.average_cadence / 90 * 100);
       metrics.cadence = `${round(summary.average_cadence)} / 90 rpm → ${pct}%`;
-      total += pct; count++;
+      secondaryPcts.push(pct);
     }
-    pogacarScore = { composite_pct: count > 0 ? round(total / count) : null, reference: refLabel, metrics, has_power_meter: hasPowerMeter };
+    let compositePct: number | null = null;
+    if (primaryPct !== null) {
+      const secondaryAvg = secondaryPcts.length > 0 ? secondaryPcts.reduce((a, b) => a + b, 0) / secondaryPcts.length : primaryPct;
+      compositePct = round(primaryPct * 0.5 + secondaryAvg * 0.5);
+    } else if (secondaryPcts.length > 0) {
+      compositePct = round(secondaryPcts.reduce((a, b) => a + b, 0) / secondaryPcts.length);
+    }
+    pogacarScore = { composite_pct: compositePct, reference: refLabel, metrics, has_power_meter: hasPowerMeter };
   }
 
   let kipchogeScore: any = null;
@@ -344,12 +358,18 @@ export function crunchActivity(raw: any, rider: RiderConfig): any {
   const sortedBySpeed = [...splitsFormatted].filter((s: any) => s.speed_kmh > 0).sort((a: any, b: any) => b.speed_kmh - a.speed_kmh);
   const fastestKm = sortedBySpeed[0] || null;
   const slowestKm = sortedBySpeed[sortedBySpeed.length - 1] || null;
-  const half = Math.floor(splitsFormatted.length / 2);
-  const h1 = splitsFormatted.slice(0, half), h2 = splitsFormatted.slice(half);
+  // Time-based halving: split movingRows at the midpoint of array (equal moving-time per half)
+  const midIdx = Math.floor(movingRows.length / 2);
+  const h1Rows = movingRows.slice(0, midIdx);
+  const h2Rows = movingRows.slice(midIdx);
+  const avgSpeedRows = (arr: any[]) => { const v = arr.map((r: any) => r.speed_kmh).filter((x: any) => x != null); return v.length > 0 ? round(v.reduce((a: number, b: number) => a + b, 0) / v.length) : null; };
+  const avgHrRows = (arr: any[]) => { const v = arr.map((r: any) => r.heartrate_bpm).filter((x: any) => x != null); return v.length > 0 ? Math.round(v.reduce((a: number, b: number) => a + b, 0) / v.length) : null; };
+  // Keep split-based helpers for all_splits display (kept for segment table HR averages)
   const avgS = (arr: any[]) => arr.length > 0 ? round(arr.reduce((s: number, x: any) => s + x.speed_kmh, 0) / arr.length) : null;
   const avgH = (arr: any[]) => { const v = arr.filter((x: any) => x.hr); return v.length > 0 ? Math.round(v.reduce((s: number, x: any) => s + x.hr, 0) / v.length) : null; };
+  const ph1 = avgSpeedRows(h1Rows) ?? 0, ph2 = avgSpeedRows(h2Rows) ?? 0;
   let pacingType = "even split";
-  const spdDiff = (avgS(h1) || 0) - (avgS(h2) || 0);
+  const spdDiff = ph1 - ph2;
   if (spdDiff > 1) pacingType = "positive split (faded)";
   else if (spdDiff < -1) pacingType = "negative split (finished strong)";
 
@@ -371,20 +391,49 @@ export function crunchActivity(raw: any, rider: RiderConfig): any {
   const fastW = timeWindows.length > 0 ? timeWindows.reduce((b: any, w: any) => (w.avg_speed_kmh || 0) > (b.avg_speed_kmh || 0) ? w : b, timeWindows[0]) : null;
   const slowW = timeWindows.length > 0 ? timeWindows.reduce((b: any, w: any) => (w.avg_speed_kmh || Infinity) < (b.avg_speed_kmh || Infinity) ? w : b, timeWindows[0]) : null;
 
-  // ═══ Cardiac drift ═══
+  // ═══ Cardiac drift (Friel method) ═══
+  // ≥60 min: first 30 min (after 10 min warm-up skip) vs last 30 min of steady effort.
+  // <60 min: simple halves with a note.
   let cardiacDrift: any = null;
-  if (hrValues.length > 100) {
+  const movingTimeSec = movingRows.length; // 1 stream point ≈ 1 second
+  if (hrValues.length > 100 && movingTimeSec >= 3600) {
+    const actStart = movingRows[0]?.time_seconds ?? 0;
+    const actEnd = movingRows[movingRows.length - 1]?.time_seconds ?? 0;
+    const warmupSec = 600, windowSec = 1800;
+    const firstWindow = movingRows.filter((r: any) =>
+      r.time_seconds >= actStart + warmupSec && r.time_seconds < actStart + warmupSec + windowSec
+    );
+    const lastWindow = movingRows.filter((r: any) => r.time_seconds >= actEnd - windowSec);
+    const avgF = (arr: any[], field: string) => { const v = arr.map((r: any) => r[field]).filter((x: any) => x != null); return v.length > 0 ? v.reduce((a: number, b: number) => a + b, 0) / v.length : 0; };
+    if (firstWindow.length > 60 && lastWindow.length > 60) {
+      const ah1 = avgF(firstWindow, "heartrate_bpm"), ah2 = avgF(lastWindow, "heartrate_bpm");
+      const as1 = avgF(firstWindow, "speed_kmh"), as2 = avgF(lastWindow, "speed_kmh");
+      const dBpm = Math.round(ah2 - ah1), dPct = round((ah2 - ah1) / ah1 * 100);
+      let interp = "Mixed pattern.";
+      if (dBpm > 5 && (as2 - as1) > -1) interp = "True cardiac drift — HR rising at similar speed. Sign of fatigue.";
+      else if (dBpm > 3 && (as2 - as1) < -2) interp = "HR rose but speed dropped more — terrain-driven.";
+      else if (dBpm < -2 && (as2 - as1) < -2) interp = "Both HR and speed dropped — eased off in second half.";
+      else if (Math.abs(dBpm) <= 3) interp = "Minimal drift — well-paced, stable cardiovascular effort.";
+      cardiacDrift = {
+        method: "Friel (first 30min vs last 30min, skipping 10min warm-up)",
+        first_window: { avg_hr: Math.round(ah1), avg_speed: round(as1) },
+        last_window: { avg_hr: Math.round(ah2), avg_speed: round(as2) },
+        drift_bpm: dBpm, drift_pct: dPct, interpretation: interp,
+      };
+    }
+  } else if (hrValues.length > 100) {
+    // Short activity (<60 min): simple halves with note
     const hi = Math.floor(movingRows.length / 2);
-    const f = (arr: any[], field: string) => { const v = arr.map((r: any) => r[field]).filter((x: any) => x != null); return v.length > 0 ? v.reduce((a: number, b: number) => a + b, 0) / v.length : 0; };
-    const ah1 = f(movingRows.slice(0, hi), "heartrate_bpm"), ah2 = f(movingRows.slice(hi), "heartrate_bpm");
-    const as1 = f(movingRows.slice(0, hi), "speed_kmh"), as2 = f(movingRows.slice(hi), "speed_kmh");
+    const avgF = (arr: any[], field: string) => { const v = arr.map((r: any) => r[field]).filter((x: any) => x != null); return v.length > 0 ? v.reduce((a: number, b: number) => a + b, 0) / v.length : 0; };
+    const ah1 = avgF(movingRows.slice(0, hi), "heartrate_bpm"), ah2 = avgF(movingRows.slice(hi), "heartrate_bpm");
+    const as1 = avgF(movingRows.slice(0, hi), "speed_kmh"), as2 = avgF(movingRows.slice(hi), "speed_kmh");
     const dBpm = Math.round(ah2 - ah1), dPct = round((ah2 - ah1) / ah1 * 100);
-    let interp = "Mixed pattern.";
-    if (dBpm > 5 && (as2 - as1) > -1) interp = "True cardiac drift — HR rising at similar speed. Sign of fatigue.";
-    else if (dBpm > 3 && (as2 - as1) < -2) interp = "HR rose but speed dropped more — terrain-driven.";
-    else if (dBpm < -2 && (as2 - as1) < -2) interp = "Both HR and speed dropped — eased off in second half.";
-    else if (Math.abs(dBpm) <= 3) interp = "Minimal drift — well-paced, stable cardiovascular effort.";
-    cardiacDrift = { first_half: { avg_hr: Math.round(ah1), avg_speed: round(as1) }, second_half: { avg_hr: Math.round(ah2), avg_speed: round(as2) }, drift_bpm: dBpm, drift_pct: dPct, interpretation: interp };
+    cardiacDrift = {
+      method: "simple halves (activity <60 min — Friel method requires 60+ min)",
+      first_half: { avg_hr: Math.round(ah1), avg_speed: round(as1) },
+      second_half: { avg_hr: Math.round(ah2), avg_speed: round(as2) },
+      drift_bpm: dBpm, drift_pct: dPct,
+    };
   }
 
   // ═══ Climbing ═══
@@ -445,19 +494,15 @@ export function crunchActivity(raw: any, rider: RiderConfig): any {
   // ═══ Training Metrics (IF, TSS, EF) ═══
   let trainingMetrics: any = null;
   if (hasPowerMeter && normalizedPower) {
-    // For running, prefer rFTP; fall back to cycling FTP with warning
+    // For running, only use rFTP — no cycling FTP fallback (produces wrong TSS)
     let effectiveFtp: number | null = null;
     let ftpSource: string | null = null;
-    let ftpWarning: string | null = null;
     if (isRun) {
       if (rider.rFtpW && rider.rFtpW > 0) {
         effectiveFtp = rider.rFtpW;
         ftpSource = "running FTP (rFTP)";
-      } else if (rider.ftpW && rider.ftpW > 0) {
-        effectiveFtp = rider.ftpW;
-        ftpSource = "cycling FTP (no RUNNER_RFTP_W set)";
-        ftpWarning = "⚠️ Using cycling FTP for running metrics. Set RUNNER_RFTP_W in .env for accurate running IF/TSS.";
       }
+      // No cycling FTP fallback for runs — TSS would be meaningless. Set RUNNER_RFTP_W in .env.
     } else if (rider.ftpW && rider.ftpW > 0) {
       effectiveFtp = rider.ftpW;
       ftpSource = "cycling FTP";
@@ -487,7 +532,6 @@ export function crunchActivity(raw: any, rider: RiderConfig): any {
       trainingMetrics = {
         ftp_used: effectiveFtp,
         ftp_source: ftpSource,
-        ftp_warning: ftpWarning,
         intensity_factor: IF,
         intensity_factor_label: ifInterpretation,
         tss: TSS,
@@ -560,38 +604,51 @@ export function crunchActivity(raw: any, rider: RiderConfig): any {
         weekly_target: 150,
         pct_of_weekly_target: `${round(pts / 150 * 100, 1)}%`,
         estimated_from: "activity type (no HR data)",
+        caveat: "Fixed rate per activity type — does not reflect actual effort intensity. HR-based calculation is more accurate.",
       };
     }
   }
 
-  // ═══ Aerobic Decoupling ═══
+  // ═══ Aerobic Decoupling (Friel method) ═══
+  // ≥60 min: first 30 min (after 10 min warm-up) vs last 30 min. <60 min: simple halves.
   let aerobicDecoupling: any = null;
   if (hasPowerMeter && hrValues.length > 100) {
-    const halfIdx = Math.floor(movingRows.length / 2);
-    const half1 = movingRows.slice(0, halfIdx);
-    const half2 = movingRows.slice(halfIdx);
     const avgField = (arr: any[], field: string) => {
       const vals = arr.map((r: any) => r[field]).filter((v: any) => v != null && typeof v === "number");
       return vals.length > 0 ? vals.reduce((a: number, b: number) => a + b, 0) / vals.length : 0;
     };
-    const pw1 = avgField(half1, "power_watts"), hr1 = avgField(half1, "heartrate_bpm");
-    const pw2 = avgField(half2, "power_watts"), hr2 = avgField(half2, "heartrate_bpm");
-    if (hr1 > 0 && hr2 > 0 && pw1 > 0 && pw2 > 0) {
-      const ratio1 = pw1 / hr1;
-      const ratio2 = pw2 / hr2;
-      const decouplingPct = round(((ratio1 - ratio2) / ratio1) * 100, 1);
-      let interpretation = "";
-      if (Math.abs(decouplingPct) < 3) interpretation = "Excellent aerobic fitness — minimal decoupling";
-      else if (Math.abs(decouplingPct) < 5) interpretation = "Good aerobic fitness — acceptable decoupling";
-      else if (Math.abs(decouplingPct) < 10) interpretation = "Moderate — aerobic base needs work";
-      else interpretation = "Significant decoupling — focus on base/endurance training";
-
-      aerobicDecoupling = {
-        first_half: { avg_power: Math.round(pw1), avg_hr: Math.round(hr1), ratio: round(ratio1, 3) },
-        second_half: { avg_power: Math.round(pw2), avg_hr: Math.round(hr2), ratio: round(ratio2, 3) },
-        decoupling_pct: decouplingPct,
-        interpretation,
-      };
+    let w1: any[], w2: any[], method: string;
+    if (movingTimeSec >= 3600) {
+      const actStart = movingRows[0]?.time_seconds ?? 0;
+      const actEnd = movingRows[movingRows.length - 1]?.time_seconds ?? 0;
+      w1 = movingRows.filter((r: any) => r.time_seconds >= actStart + 600 && r.time_seconds < actStart + 2400);
+      w2 = movingRows.filter((r: any) => r.time_seconds >= actEnd - 1800);
+      method = "Friel (first 30min vs last 30min, skipping 10min warm-up)";
+    } else {
+      const halfIdx = Math.floor(movingRows.length / 2);
+      w1 = movingRows.slice(0, halfIdx);
+      w2 = movingRows.slice(halfIdx);
+      method = "simple halves (activity <60 min)";
+    }
+    if (w1.length > 30 && w2.length > 30) {
+      const pw1 = avgField(w1, "power_watts"), hr1 = avgField(w1, "heartrate_bpm");
+      const pw2 = avgField(w2, "power_watts"), hr2 = avgField(w2, "heartrate_bpm");
+      if (hr1 > 0 && hr2 > 0 && pw1 > 0 && pw2 > 0) {
+        const ratio1 = pw1 / hr1, ratio2 = pw2 / hr2;
+        const decouplingPct = round(((ratio1 - ratio2) / ratio1) * 100, 1);
+        let interpretation = "";
+        if (Math.abs(decouplingPct) < 3) interpretation = "Excellent aerobic fitness — minimal decoupling";
+        else if (Math.abs(decouplingPct) < 5) interpretation = "Good aerobic fitness — acceptable decoupling";
+        else if (Math.abs(decouplingPct) < 10) interpretation = "Moderate — aerobic base needs work";
+        else interpretation = "Significant decoupling — focus on base/endurance training";
+        aerobicDecoupling = {
+          method,
+          first_window: { avg_power: Math.round(pw1), avg_hr: Math.round(hr1), ratio: round(ratio1, 3) },
+          last_window: { avg_power: Math.round(pw2), avg_hr: Math.round(hr2), ratio: round(ratio2, 3) },
+          decoupling_pct: decouplingPct,
+          interpretation,
+        };
+      }
     }
   }
 
@@ -609,15 +666,20 @@ export function crunchActivity(raw: any, rider: RiderConfig): any {
       bestEffortsWkg[label] = `${round(watts / rider.weightKg, 2)} W/kg`;
     }
 
-    // Classify level based on 20min W/kg (rough categories)
-    let level = "";
-    const twentyMinWkg = bestPowerRaw["20min"] ? bestPowerRaw["20min"] / rider.weightKg : (npWkg || avgWkg);
-    if (twentyMinWkg >= 6.0) level = "World Tour Pro";
-    else if (twentyMinWkg >= 5.0) level = "Cat 1 / Elite";
-    else if (twentyMinWkg >= 4.0) level = "Cat 2-3 / Strong Amateur";
-    else if (twentyMinWkg >= 3.0) level = "Cat 4 / Intermediate";
-    else if (twentyMinWkg >= 2.0) level = "Recreational";
-    else level = "Beginner";
+    // Classify level only when bestPowerRaw["20min"] exists — NP/avg fallback misclassifies riders
+    let estimatedLevel: string | null = null;
+    let levelNote: string | null = null;
+    if (bestPowerRaw["20min"]) {
+      const twentyMinWkg = bestPowerRaw["20min"] / rider.weightKg!;
+      if (twentyMinWkg >= 6.0) estimatedLevel = "World Tour Pro";
+      else if (twentyMinWkg >= 5.0) estimatedLevel = "Cat 1 / Elite";
+      else if (twentyMinWkg >= 4.0) estimatedLevel = "Cat 2-3 / Strong Amateur";
+      else if (twentyMinWkg >= 3.0) estimatedLevel = "Cat 4 / Intermediate";
+      else if (twentyMinWkg >= 2.0) estimatedLevel = "Recreational";
+      else estimatedLevel = "Beginner";
+    } else {
+      levelNote = "estimated_level requires a 20-min best power effort in this activity";
+    }
 
     powerToWeight = {
       weight_kg: rider.weightKg,
@@ -625,7 +687,8 @@ export function crunchActivity(raw: any, rider: RiderConfig): any {
       np_wkg: npWkg,
       ftp_wkg: ftpWkg,
       best_efforts_wkg: Object.keys(bestEffortsWkg).length > 0 ? bestEffortsWkg : null,
-      estimated_level: level,
+      estimated_level: estimatedLevel,
+      level_note: levelNote,
     };
   }
 
@@ -951,33 +1014,32 @@ export function crunchActivity(raw: any, rider: RiderConfig): any {
 
   // ═══ Estimated VO2max ═══
   let vo2max: any = null;
-  // Method 1: Power-based (ACSM cycling metabolic equation) — most accurate
-  // VO2max ≈ (10.8 × 20min_power / weight) + 7
-  if (hasPowerMeter && rider.weightKg && rider.weightKg > 0 && bestPowerRaw["20min"]) {
+  const vo2Level = (est: number) => {
+    if (est >= 80) return "World-class";
+    if (est >= 70) return "Elite";
+    if (est >= 60) return "Excellent";
+    if (est >= 50) return "Very Good";
+    if (est >= 40) return "Good";
+    if (est >= 30) return "Fair";
+    return "Below average";
+  };
+  // Method 1a: FTP-based (most reliable — FTP is validated, not ride-specific)
+  // FTP ≈ 95% of maximal 20-min power → input = FTP / 0.95
+  if (hasPowerMeter && rider.weightKg && rider.weightKg > 0 && rider.ftpW && rider.ftpW > 0) {
+    const p20equiv = rider.ftpW / 0.95;
+    const est = round((10.8 * p20equiv / rider.weightKg) + 7, 1);
+    vo2max = { value: est, unit: "ml/kg/min", method: "power (FTP-based, ACSM)", level: vo2Level(est), source: `FTP ${rider.ftpW}W / ${rider.weightKg}kg` };
+  }
+  // Method 1b: Best 20-min from activity (less reliable — only valid if it was a maximal effort)
+  else if (hasPowerMeter && rider.weightKg && rider.weightKg > 0 && bestPowerRaw["20min"]) {
     const p20 = bestPowerRaw["20min"];
     const est = round((10.8 * p20 / rider.weightKg) + 7, 1);
-    let level = "";
-    if (est >= 80) level = "World-class";
-    else if (est >= 70) level = "Elite";
-    else if (est >= 60) level = "Excellent";
-    else if (est >= 50) level = "Very Good";
-    else if (est >= 40) level = "Good";
-    else if (est >= 30) level = "Fair";
-    else level = "Below average";
-    vo2max = { value: est, unit: "ml/kg/min", method: "power (ACSM)", level, source: `20min best: ${p20}W / ${rider.weightKg}kg` };
+    vo2max = { value: est, unit: "ml/kg/min", method: "power (20min best, ACSM — set RIDER_FTP_W for reliable estimate)", level: vo2Level(est), source: `20min best: ${p20}W / ${rider.weightKg}kg` };
   }
-  // Method 2: HR-based fallback (Uth formula) — less accurate but works without power
+  // Method 2: HR-based fallback (Uth formula) — only when restHr is actually configured
   else if (effectiveMaxHr && effectiveRestHr && effectiveRestHr < effectiveMaxHr) {
     const est = round(15.3 * (effectiveMaxHr / effectiveRestHr), 1);
-    let level = "";
-    if (est >= 80) level = "World-class";
-    else if (est >= 70) level = "Elite";
-    else if (est >= 60) level = "Excellent";
-    else if (est >= 50) level = "Very Good";
-    else if (est >= 40) level = "Good";
-    else if (est >= 30) level = "Fair";
-    else level = "Below average";
-    vo2max = { value: est, unit: "ml/kg/min", method: "HR (Uth formula)", level, source: `maxHR ${effectiveMaxHr} / restHR ${effectiveRestHr}` };
+    vo2max = { value: est, unit: "ml/kg/min", method: "HR (Uth formula — rough estimate, set RIDER_FTP_W + weight for accuracy)", level: vo2Level(est), source: `maxHR ${effectiveMaxHr} / restHR ${effectiveRestHr}` };
   }
 
   // ═══ Workout Analysis (HR-only, no GPS) ═══
@@ -1134,22 +1196,25 @@ export function crunchActivity(raw: any, rider: RiderConfig): any {
       recoveryRatio = { threshold_bpm: recoveryThreshold, recovery_seconds: recoverySec, recovery_pct: recoveryPct, label: recoveryLabel };
     }
 
-    // ─── 6. EPOC Estimate ───
+    // ─── 6. EPOC Estimate (relative intensity signal — not calories) ───
     let epocEstimate: any = null;
     if (trainingZones?.hr_zones?.zones) {
-      // kcal/sec multipliers per zone (approximate, based on excess O2 consumption research)
+      // Zone-weighted relative intensity factors (no published calorie basis — qualitative only)
       const epocFactors = [0.005, 0.010, 0.018, 0.030, 0.050];
-      const epocKcal = trainingZones.hr_zones.zones.reduce((sum: number, z: any, i: number) => {
+      const epocScore = trainingZones.hr_zones.zones.reduce((sum: number, z: any, i: number) => {
         return sum + z.time_seconds * epocFactors[i];
       }, 0);
       const weight = rider.weightKg || 75;
-      const scaled = round(epocKcal * (weight / 75), 1); // scale by weight
-      let epocLabel = "";
-      if (scaled < 20) epocLabel = "Minimal afterburn (recovery session)";
-      else if (scaled < 60) epocLabel = "Moderate afterburn";
-      else if (scaled < 120) epocLabel = "Significant afterburn (HIIT-level)";
-      else epocLabel = "High afterburn (intense HIIT)";
-      epocEstimate = { kcal: scaled, label: epocLabel, note: "Estimated post-exercise calorie burn (EPOC)" };
+      const scaledScore = round(epocScore * (weight / 75), 1);
+      let intensitySignal = "";
+      if (scaledScore < 20) intensitySignal = "Low";
+      else if (scaledScore < 60) intensitySignal = "Moderate";
+      else if (scaledScore < 120) intensitySignal = "High";
+      else intensitySignal = "Very High";
+      epocEstimate = {
+        intensity_signal: intensitySignal,
+        note: "Relative intensity signal — not a calorie count. Higher = more post-exercise metabolic demand.",
+      };
     }
 
     workoutAnalysis = {
@@ -1260,55 +1325,60 @@ export function crunchActivity(raw: any, rider: RiderConfig): any {
 
       // Per-waypoint segment stats for detailed breakdown
       const segStats: Record<number, { hw: number; tw: number; cw: number; total: number; windSpeed: number | null; windDir: number | null }> = {};
+      const segCosineSum: Record<number, number> = {};
+      const segCosineCnt: Record<number, number> = {};
       for (const s of snapshots) {
         segStats[s.waypoint_pct] = { hw: 0, tw: 0, cw: 0, total: 0, windSpeed: s.windspeed_kmh, windDir: s.wind_direction_deg };
+        segCosineSum[s.waypoint_pct] = 0;
+        segCosineCnt[s.waypoint_pct] = 0;
       }
 
       for (let i = 1; i < movingGps.length; i++) {
         const prev = movingGps[i - 1], cur = movingGps[i];
         const snap = getSnapshot(i, movingGps.length);
-        if (snap.wind_direction_deg == null) continue;
+        if (snap.wind_direction_deg == null || snap.windspeed_kmh == null) continue;
 
         const hdg = bearing(prev.latitude, prev.longitude, cur.latitude, cur.longitude);
-        const rel = ((hdg - snap.wind_direction_deg) + 360) % 360;
+        const relDeg = ((hdg - snap.wind_direction_deg) + 360) % 360;
+        // cos(0°)=1 = direct headwind, cos(180°)=-1 = direct tailwind
+        const cosComponent = snap.windspeed_kmh * Math.cos(relDeg * Math.PI / 180);
 
         analyzedSec++;
         const seg = segStats[snap.waypoint_pct];
         seg.total++;
+        segCosineSum[snap.waypoint_pct] += cosComponent;
+        segCosineCnt[snap.waypoint_pct]++;
 
-        if (rel <= 45 || rel >= 315) { headwindSec++; seg.hw++; }
-        else if (rel >= 135 && rel <= 225) { tailwindSec++; seg.tw++; }
+        if (relDeg <= 45 || relDeg >= 315) { headwindSec++; seg.hw++; }
+        else if (relDeg >= 135 && relDeg <= 225) { tailwindSec++; seg.tw++; }
         else { crosswindSec++; seg.cw++; }
       }
 
       if (analyzedSec > 0) {
-        // Net wind effect: weighted average of headwind components across all snapshots
-        const avgHeadwindComponent = round(
-          snapshots.reduce((sum, s) => {
-            if (s.windspeed_kmh == null || s.wind_direction_deg == null) return sum;
-            const seg = segStats[s.waypoint_pct];
-            if (seg.total === 0) return sum;
-            const segHwPct = seg.hw / seg.total;
-            const segTwPct = seg.tw / seg.total;
-            return sum + s.windspeed_kmh * (segHwPct - segTwPct) * (seg.total / analyzedSec);
+        // Net headwind exposure: weighted average of cosine components (windspeed × cos(angle))
+        const netHeadwindExposure = round(
+          Object.entries(segCosineSum).reduce((sum, [pct, cosSum]) => {
+            const cnt = segCosineCnt[Number(pct)];
+            if (cnt === 0) return sum;
+            return sum + (cosSum / cnt) * (cnt / analyzedSec);
           }, 0), 1
         );
 
         const segBreakdown = Object.entries(segStats)
           .filter(([, v]) => v.total > 0)
           .map(([pct, v]) => {
-            const hwPct = v.hw / v.total;
-            const twPct = v.tw / v.total;
-            const segNet = v.windSpeed != null ? round(v.windSpeed * (hwPct - twPct), 1) : null;
+            const cosAvg = segCosineCnt[Number(pct)] > 0
+              ? round(segCosineSum[Number(pct)] / segCosineCnt[Number(pct)], 1)
+              : null;
             return {
               waypoint_pct: Number(pct),
               wind_speed_kmh: v.windSpeed,
               wind_direction_deg: v.windDir,
               wind_direction_cardinal: v.windDir != null ? degToCardinal(v.windDir) : null,
-              headwind_pct: round(hwPct * 100, 1),
-              tailwind_pct: round(twPct * 100, 1),
+              headwind_pct: round(v.hw / v.total * 100, 1),
+              tailwind_pct: round(v.tw / v.total * 100, 1),
               crosswind_pct: round(v.cw / v.total * 100, 1),
-              net_kmh: segNet,
+              headwind_component_kmh: cosAvg,
             };
           });
 
@@ -1318,8 +1388,9 @@ export function crunchActivity(raw: any, rider: RiderConfig): any {
           headwind_pct: round(headwindSec / analyzedSec * 100, 1),
           tailwind_pct: round(tailwindSec / analyzedSec * 100, 1),
           crosswind_pct: round(crosswindSec / analyzedSec * 100, 1),
-          net_wind_effect_kmh: avgHeadwindComponent,
-          net_wind_label: avgHeadwindComponent > 1 ? "Net headwind (drag)" : avgHeadwindComponent < -1 ? "Net tailwind (assist)" : "Roughly neutral",
+          headwind_exposure_kmh: netHeadwindExposure,
+          headwind_label: netHeadwindExposure > 1 ? "Net headwind exposure" : netHeadwindExposure < -1 ? "Net tailwind exposure" : "Roughly neutral",
+          note: "headwind_exposure_kmh = windspeed × cos(angle) — directional exposure index, not a speed delta",
           by_segment: segBreakdown.length > 1 ? segBreakdown : null,
         };
       }
@@ -1358,7 +1429,6 @@ export function crunchActivity(raw: any, rider: RiderConfig): any {
 
   // ═══ Build output ═══
   return {
-    _instructions: "All math is pre-computed from every data point. DO NOT recalculate. Just interpret the numbers and write the analysis per AI_ANALYSIS_INSTRUCTIONS.md.",
     data_points_analyzed: totalPoints,
     pogacar_score: isSurf ? null : pogacarScore,
     kipchoge_score: kipchogeScore,
@@ -1366,8 +1436,8 @@ export function crunchActivity(raw: any, rider: RiderConfig): any {
     surf_analysis: surfAnalysis,
     pacing: {
       type: pacingType,
-      first_half: { avg_speed_kmh: avgS(h1), avg_hr: avgH(h1) },
-      second_half: { avg_speed_kmh: avgS(h2), avg_hr: avgH(h2) },
+      first_half: { avg_speed_kmh: round(ph1), avg_hr: avgHrRows(h1Rows) },
+      second_half: { avg_speed_kmh: round(ph2), avg_hr: avgHrRows(h2Rows) },
       fastest_km: fastestKm,
       slowest_km: slowestKm,
       fastest_5min_window: fastW,
@@ -1383,14 +1453,12 @@ export function crunchActivity(raw: any, rider: RiderConfig): any {
     power: hasPowerMeter ? {
       avg_power: Math.round(summary.average_watts),
       normalized_power: normalizedPower,
-      weighted_avg_power: normalizedPower, // alias
       variability_index: normalizedPower && summary.average_watts ? round(normalizedPower / summary.average_watts, 2) : null,
       best_efforts: bestPower,
       has_power_meter: true,
     } : summary.average_watts ? {
       estimated_avg_power: Math.round(summary.average_watts),
       has_power_meter: false,
-      note: "Strava-estimated power (no power meter). Treat as approximate.",
     } : null,
     climbing,
     cadence: cadenceValues.length > 0 ? (() => {

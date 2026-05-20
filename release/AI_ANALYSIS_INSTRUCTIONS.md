@@ -8,7 +8,7 @@ You are analyzing a JSON file exported from Strava containing detailed cycling/r
 
 Your analysis MUST follow this structure, in this order. Use markdown formatting with headers, tables, bold, and code blocks exactly as shown.
 
----
+--- 
 
 ### 1. 🏆 The Pogačar Score (ALWAYS START WITH THIS)
 
@@ -21,7 +21,7 @@ Use these reference benchmarks for Pogačar (pro race context):
 | **Average speed (flat/rolling ride)** | 42-45 km/h (race), 38-40 km/h (solo training) | `your_avg_speed / 41.5 * 100` |
 | **Average speed (climbing ride, >1500m elev)** | 22-26 km/h on mountain stages | `your_avg_speed / 24 * 100` |
 | **Power (FTP)** | ~6.5 W/kg (estimated ~440W at 68kg) | `your_watts / 440 * 100` (or per-kg if weight known) |
-| **Efficiency Factor** | ~2.6 W/bpm (440W NP / 170 avg HR) | `your_EF / 2.6 * 100` |
+| **Efficiency Factor** | ~2.9 W/bpm (440W NP / ~150 avg HR — rough estimate, grand tour race avg HR) | `your_EF / 2.9 * 100` |
 | **Climbing (VAM)** | 1800-2000 m/h on HC climbs | `your_VAM / 1900 * 100` |
 | **Cadence** | 85-95 rpm | `your_cadence / 90 * 100` |
 
@@ -381,7 +381,7 @@ If `wind_analysis` exists within meteorology, show the wind impact:
 | Mid (55%) | 28 km/h SW | 31% | 44% | 25% |
 
 **Overall: 41% headwind · 34% tailwind · 25% crosswind**
-Net wind effect: +3.2 km/h drag (Net headwind)
+Net wind effect: headwind exposure index +3.2 (positive = net headwind, negative = net tailwind)
 ```
 
 **Key insights to mention:**
@@ -389,12 +389,60 @@ Net wind effect: +3.2 km/h drag (Net headwind)
 - Did a headwind in the first half explain elevated HR vs speed ratio?
 - Strong crosswinds on mountain passes or exposed roads
 - If gusts ≥ 40 km/h, note that as a significant external factor
-- If `net_wind_effect_kmh` is negative (tailwind assist), note the speed boost wasn't "free fitness"
+- If `headwind_exposure_kmh` is negative (tailwind assist), note the speed boost wasn't "free fitness"
+- `headwind_exposure_kmh` = windspeed × cos(angle) — directional exposure index. Positive = net headwind, negative = net tailwind. Not a direct speed impact.
 - For multi-hour rides with `by_segment` data, highlight if wind direction changed significantly (e.g. headwind going, tailwind returning on an out-and-back)
 
 > If `meteorology` is null or missing, skip this section entirely.
 
-#### 4.14 Segment Highlights
+#### 4.14 Heart Points (if `heart_points` exists)
+
+| Metric | Value |
+|--------|-------|
+| Heart Points | 45.2 |
+| Moderate minutes | 18 min |
+| Vigorous minutes | 13.6 min |
+| % of weekly target (150 pts) | 30.1% |
+
+- **Vigorous** = HR ≥ 77% max HR (earns 2 pts/min). **Moderate** = HR ≥ 64% max HR (earns 1 pt/min).
+- Weekly target: 150 pts ≈ WHO recommendation (150 min moderate or 75 min vigorous/week).
+- If `estimated_from: "activity type"` is present, note caveat: fixed rate, doesn't reflect actual intensity.
+
+#### 4.15 VO2max Estimate (if `vo2max` exists)
+
+Present concisely — one line + context:
+
+- **VO2max: X ml/kg/min** — [Level]. Estimated via [method].
+- Method reliability: `power (FTP-based)` = most reliable; `power (20min best)` = good if ride was a maximal effort; `HR (Uth formula)` = rough estimate only.
+- For context: recreational cyclists 35–45, trained amateurs 50–60, elite 65–75+, world-class 80+.
+- Always note: this is an estimate, not a lab measurement.
+
+#### 4.16 Workout Analysis (if `workout_analysis` exists — gym/HIIT/indoor sessions only)
+
+**Only for Workout/WeightTraining/HIIT/CrossFit activities.** Skip entirely for outdoor rides/runs.
+
+**Workout Intensity Score:**
+- `WIS: X/100 — [Light/Moderate/Hard/Very Hard/Max]` — zone-weighted HR intensity index.
+
+**Interval Detection** (if `intervals_detected > 0`):
+
+| Interval | Work | Rest | Peak HR | Avg Work HR |
+|----------|------|------|---------|-------------|
+| 1 | 45s | 30s | 178 bpm | 171 bpm |
+
+Show `work_rest_ratio` and `interval_threshold_bpm`.
+
+**HR Recovery Rate** (if present):
+- Drop 30s / 60s after peak HR peaks → [Excellent/Good/Fair/Needs work]
+- Context: >30 bpm drop in 60s = excellent cardiac recovery.
+
+**Consistency Score:** CV: X% → [Very steady / Moderate variation / Variable / Highly variable]
+
+**EPOC Intensity:** `intensity_signal` — [Low/Moderate/High/Very High]. Note: relative signal only, not calories.
+
+Include HR progression pattern and time-to-peak if notable.
+
+#### 4.17 Segment Highlights
 
 **Count PRs** first: "You set **14 personal records** on this ride!"
 
@@ -461,9 +509,132 @@ You receive a **pre-computed JSON** where all math is already done from every da
 | `gradient_analysis` | Gradient distribution across bands, steepest segment — **present in section 4.8**                                                 |
 | `vam_analysis` | Overall VAM, per-climb VAM, best VAM climb — **present in section 4.8**                                                           |
 | `torque` | Avg and peak torque in Nm — **present in section 4.9**                                                                            |
-| `meteorology` | Weather conditions + wind analysis — **present in section 4.13**                                                                  |
+| `meteorology` | Weather conditions + wind analysis (`headwind_exposure_kmh` = cosine-based directional index) — **present in section 4.13** |
+| `heart_points` | Google Fit-style weekly activity points: moderate/vigorous minutes, weekly target % — **present in section 4.10** |
+| `vo2max` | Estimated VO2max: value, method (FTP-based/20min/HR-Uth), level — **present in section 4.11** |
+| `workout_analysis` | For Workout/HIIT: WIS score, intervals, HR recovery rate, consistency CV, EPOC signal — **present in section 4.12** |
 
 **DO NOT recalculate anything.** All numbers are final. Just read them and write the analysis.
+
+| `historical_context` | Pre-computed baselines for same sport group across 5 time windows (1w/1mo/3mo/6mo/1yr) — **present in section 6**. Fields: `avg_hr`, `avg_pace_sec_per_km`, `avg_normalized_power_w`, `avg_tss`, `avg_trimp`, `avg_efficiency_factor`, `avg_cadence`, `avg_variability_index`, `avg_cardiac_drift_bpm`, `avg_z2_pct`, `avg_best_20min_power_w`, `avg_aerobic_decoupling_pct`, `avg_vo2max`, `weekly_avg_distance_km` |
+| `garmin_wellness` | Garmin Fenix wellness data: HRV, sleep score, Body Battery, resting HR, training readiness — **present in section 7** |
+| `personal_records_broken` | Flags if this activity broke any all-time personal records (longest distance, fastest pace, best power, biggest climb) — **celebrate prominently in section 3 and section 5** |
+
+---
+
+### 6. 📈 Historical Context (if `historical_context` is present in the data)
+
+The data arrives as `{ activity_data: {...}, historical_context: { sport, baselines: [...] } }` when historical data is available, or as a plain crunched JSON when it is not. If `historical_context` is absent or null, **skip this section entirely** — do not mention the absence.
+
+Each baseline in `baselines[]` covers activities of the **same sport group** (e.g. all Rides grouped together regardless of sub-type) from the given window strictly before this activity's date.
+
+**Format:**
+
+```
+## 📈 HISTORICAL CONTEXT — How Does This [Ride/Run/Session] Fit In?
+
+**Primary metrics:**
+
+| Period    | Activities | Avg HR | Avg Pace / Power | Avg NP | Avg Cadence | Weekly km |
+|-----------|-----------|--------|------------------|--------|-------------|-----------|
+| 1 week    | 3  | 148 bpm | 5:12/km | 210 W | 82 rpm | 38 km |
+| 1 month   | 11 | 151 bpm | 5:18/km | 205 W | 80 rpm | 42 km |
+| 3 months  | 34 | 153 bpm | 5:24/km | 198 W | 79 rpm | 45 km |
+| 6 months  | 62 | 154 bpm | 5:27/km | 195 W | 79 rpm | 43 km |
+| 1 year    | 98 | 155 bpm | 5:30/km | 190 W | 78 rpm | 44 km |
+
+**Training quality metrics** (only include columns where data is present):
+
+| Period    | Avg TSS | Avg EF | Avg Z2% | Best 20min W | Avg VI | Avg Drift | Avg Decoupling | Avg VO2max |
+|-----------|---------|--------|---------|--------------|--------|-----------|----------------|------------|
+| 1 week    | 85 | 1.42 | 32% | 215 W | 1.08 | +3 bpm | 2.1% | 38.5 |
+| 1 month   | 78 | 1.38 | 28% | 208 W | 1.10 | +4 bpm | 3.2% | 37.8 |
+| 3 months  | 72 | 1.35 | 25% | 200 W | 1.12 | +5 bpm | 4.1% | 37.1 |
+| 6 months  | 68 | 1.32 | 24% | 195 W | 1.14 | +5 bpm | 4.5% | 36.8 |
+| 1 year    | 65 | 1.29 | 22% | 188 W | 1.15 | +6 bpm | 5.0% | 36.2 |
+
+**Avg Elevation per ride** (if `total_distance_km` > 0 and elevation present in baselines): X m avg ascent — shows if rides are getting hillier/flatter over time.
+```
+
+**This activity vs. your baselines** — use **3 months as the primary comparison period** for all performance metrics. Use **6 months as secondary reference** only for slow-adapting fitness indicators (EF, decoupling, VO2max, Z2%). If 3 months has fewer than 5 activities, fall back to 6 months. Skip 1 week comparisons in this list (it's too small a sample for meaningful trends) and skip 1 year comparisons (too distant to be relevant):
+
+- ❤️ **HR:** X bpm vs. 3 month avg Y bpm → [lower = better aerobic efficiency / higher = harder effort or fatigue]
+- ⚡ **Pace/Power:** [faster/slower/equal] vs. 3 month avg → [interpretation]
+- 🔄 **Cadence:** X rpm vs. 3 month avg Y rpm → [higher = better neuromuscular efficiency / lower = fatigue or terrain] (only show if `avg_cadence` is present in baselines)
+- ⚡ **NP:** X W vs. 3 month avg Y W → [higher = stronger effort / lower = easier ride or recovery]
+- 🎯 **EF:** X vs. 6 month avg Y → [rising = aerobic fitness improving 🟢 / falling = fatigue or harder terrain] *(slow metric — use 6 month baseline)*
+- 📊 **TSS:** X vs. 3 month avg Y → [easy recovery / normal training / hard push]
+- 🟢 **Z2%:** X% vs. 6 month avg Y% → [more Z2 = better base building; less = more intensity] *(slow metric — use 6 month baseline)*
+- 💪 **Best 20min power:** X W vs. 3 month avg Y W → [improving / steady / declining]
+- 🔄 **VI:** X vs. 3 month avg Y → [lower VI = steadier effort; higher = more surges/variation]
+- 🫀 **Cardiac drift:** X bpm vs. 3 month avg Y bpm → [less drift = better aerobic fitness / more drift = fatigue or heat]
+- 🫁 **Aerobic decoupling:** X% vs. 6 month avg Y% → [<3% = excellent base fitness 🟢; >10% = needs more Z2 work 🔴; improving trend = aerobic adaptation] *(slow metric — use 6 month baseline)*
+- 📉 **VO2max:** X ml/kg/min vs. 6 month avg Y → [rising = fitness improving 🟢 / falling = detraining or fatigue 🔴] *(slow metric — use 6 month baseline; note: estimated, not lab-measured)*
+- 🔥 **Load (TRIMP):** X vs. 3 month avg Y → [easy recovery / normal training / hard push]
+- 📈 **Trend:** [improving / stable / declining] — based on the 3 month window (most reliable for current fitness state)
+```
+
+**Rules:**
+- **Primary comparison: 3 months.** Use this for HR, power, pace, cadence, TSS, TRIMP, VI, cardiac drift. It captures your current training block without noise from distant past.
+- **Secondary comparison: 6 months** for slow-adapting metrics only: EF, Z2%, aerobic decoupling, VO2max. These take a full training cycle to shift meaningfully.
+- **Never use 1 year as a comparison baseline** — too distant, fitness context too different.
+- **1 week is for context only** — mention it in the table but don't base trend statements on it (sample too small).
+- If the 3 month window has fewer than 5 activities, fall back to 6 months and note it.
+- **Pace delta**: negative seconds = faster (improvement 🟢), positive = slower (regression 🔴 or deliberate easy day)
+- **HR delta**: lower HR at equal/better pace or power = aerobic adaptation 🟢; higher HR at same pace = fatigue or detraining 🔴
+- **Efficiency Factor (EF)** trend: rising over time = aerobic fitness improving — highlight this if data shows it
+- **TRIMP** context: <40 easy/recovery, 40–80 moderate, 80–130 hard, 130+ very hard
+- **Omit columns with all-null values** — if `avg_pace_sec_per_km` is null across all periods (e.g. cycling), show power instead; if both null, skip that column
+- **Always interpret in context** — one harder-than-average session is fine and expected; consistently elevated HR with falling pace/power across 3+ months = flag for recovery week
+- **Pace display**: convert `avg_pace_sec_per_km` to `M:SS/km` format when showing in the table
+  - If `historical_context` is null or absent, **skip this section entirely**
+
+---
+
+### 7. 🛌 Readiness & Recovery Context (if `garmin_wellness` is present)
+
+Data comes from the athlete's **Garmin Fenix 7 Pro Solar** watch. `night_before` = the calendar night before the activity. `day_of` = the activity day. If `garmin_wellness` is absent or null, **skip this section entirely**.
+
+**Format:**
+
+```
+## 🛌 READINESS — How Were You Going In?
+
+| Metric | Value | Assessment |
+|--------|-------|------------|
+| 😴 Sleep score | 72/100 (6.8h) | Good |
+| 🧠 HRV last night | 48 ms (+4 vs 7d avg) | Above baseline ✅ |
+| ❤️ Resting HR | 52 bpm | Normal |
+| 🔋 Body Battery | 74/100 at activity start | Well charged ✅ |
+| 🎯 Training Readiness | 68/100 (READY) | Go for it |
+| 😓 Overnight stress | 22 | Low — good recovery |
+| 😰 High stress | 8% of waking day | Low |
+```
+
+**Interpretation rules:**
+- **HRV**: `hrv_vs_baseline` > +3 = above baseline 🟢 (PR day potential), -3 to +3 = normal, < -5 = suppressed 🔴
+- **Stress breakdown**: `stress_high_pct` >20% of waking day (16 hours) before activity = recovery likely impaired even if sleep looked ok; combine with HRV to assess
+- **HRV note**: `hrv_last_5_min` is the 5-minute peak HRV during sleep (not the full-night average). It's still a valid readiness signal — higher = better recovered. `hrv_weekly_avg` is the 7-day rolling average used as the baseline.
+- **HRV status**: "BALANCED" = good, "UNBALANCED" / "LOW" = recovery flag
+- **Sleep score**: 85+ = excellent, 70–84 = good, 55–69 = fair, <55 = poor (note impact on perceived effort)
+- **Body Battery at start**: 80–100 = prime, 60–79 = good, 40–59 = moderate, <40 = running low (may explain early fatigue or higher-than-expected HR)
+- **Training Readiness**: 73–100 = PRIME/READY, 40–72 = MODERATE, <40 = LOW (Garmin composite: HRV + sleep + recovery time + acute load)
+- **Resting HR**: compare to `rhr_values` trend — if elevated 3+ bpm vs baseline = possible fatigue/illness
+- **SpO2 during sleep** (<95% average is notable; <90% = flag for altitude or apnea)
+
+**Connect to the activity data — always cross-reference:**
+- Low HRV + high activity HR → "HR was likely elevated partly due to incomplete recovery rather than effort"
+- High Body Battery + low HR → "You were fresh — this was a controlled effort with room in the tank"
+- Poor sleep score → note it may have blunted performance or perceived effort
+- Excellent readiness + PR/high-effort session → "Conditions were clearly aligned"
+- **If readiness was poor but performance was still strong** → highlight this as a sign of good mental resilience / fitness
+
+**Important:**
+- Only available when `python garmin_sync.py` has been run
+- Data is from the **Garmin Fenix 7 Pro Solar** worn 24/7 (not during cycling, where the watch is removed)
+- Sleep data is attributed to the morning it ends (so "night before" = the day prior's entry)
+- If `night_before` is null but `day_of` exists, use day-of metrics only
+- Do not recalculate anything — just interpret the pre-computed values
 
 ---
 

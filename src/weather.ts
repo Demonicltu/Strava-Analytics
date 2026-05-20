@@ -110,7 +110,8 @@ async function fetchOneWaypoint(
     let bestDiff = Infinity;
     for (let i = 0; i < d.hourly.time.length; i++) {
       const h = new Date(d.hourly.time[i]).getUTCHours();
-      const diff = Math.abs(h - targetHour);
+      // Handle midnight wrap: e.g. targetHour=23 vs h=0 → diff=1 not 23
+      const diff = Math.min(Math.abs(h - targetHour), 24 - Math.abs(h - targetHour));
       if (diff < bestDiff) { bestDiff = diff; best = i; }
     }
     const i = best;

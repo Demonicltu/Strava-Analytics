@@ -1,11 +1,5 @@
 @echo off
-title Strava Analytics
-echo.
-echo  ==========================================
-echo   Strava Analytics - Fast Mode
-echo  ==========================================
-echo.
-node "%~dp0dist\strava.cjs"
-echo.
+REM Fast mode — fetch + crunch + AI + push to Strava
+cd /d "%~dp0"
+node dist\strava.cjs %*
 pause
-
