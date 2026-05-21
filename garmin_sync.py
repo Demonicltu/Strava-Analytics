@@ -8,6 +8,10 @@ Note: training_status/acute_load/chronic_load/load_ratio/total_calories/
 hrv_last_night/vo2max_garmin/training_effect_* are not returned by this
 Garmin API and are intentionally omitted.
 
+The latest cached date is ALWAYS re-fetched because Garmin populates it
+incrementally and the previous sync may have captured incomplete data.
+Use --force to re-fetch the entire history.
+
 Usage:
     python garmin_sync.py                        # sync last 90 days
     python garmin_sync.py --days 365             # sync last 365 days
@@ -255,13 +259,22 @@ def main():
     all_dates = build_date_range()
     existing = load_existing() if not args.force else {}
 
-    to_fetch = [d for d in all_dates if d not in existing] if not args.force else list(all_dates)
+    # Always re-fetch the latest cached date — it was the "last day" at the
+    # time of the previous sync, so Garmin may have incomplete data for it.
+    latest_cached = max(existing.keys()) if existing else None
+
+    if not args.force:
+        to_fetch = [d for d in all_dates if d not in existing or d == latest_cached]
+    else:
+        to_fetch = list(all_dates)
+
     already_cached = len(all_dates) - len(to_fetch)
 
     period_label = f"since {since_override}" if since_override else f"last {args.days} days"
+    refetch_note = f" (incl. re-fetch of latest cached: {latest_cached})" if latest_cached else ""
     print(f"\n🏃 Garmin Connect Wellness Sync")
     print(f"   Period: {period_label} ({min(all_dates)} → {max(all_dates)})")
-    print(f"   Total: {len(all_dates)} days | Cached: {already_cached} | To fetch: {len(to_fetch)}\n")
+    print(f"   Total: {len(all_dates)} days | Cached: {already_cached} | To fetch: {len(to_fetch)}{refetch_note}\n")
 
     if not to_fetch:
         print("✅ All days already cached. Use --force to re-fetch.")

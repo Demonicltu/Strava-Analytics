@@ -89,6 +89,7 @@ All **outdoor** activities (GPS present) additionally get: **Meteorology** (temp
 | `npm run analyze` | Send to AI for written analysis (+ history + Garmin + PR check) |
 | `npm run update` | Push analysis to Strava description + notes |
 | **`npm run bulk`** | ⏳ Fetch & crunch last 2 years of Strava history (no AI — enables historical context) |
+| **`npm run recrunch`** | 🔬 Re-crunch all existing downloads to pick up new metrics (no API calls) |
 | **`npm run compare`** | 📊 AI fitness trend analysis across any time window |
 | **`npm run digest`** | 📅 Weekly/monthly digest — overtraining warning, race predictions, training adherence |
 | **`npm run records`** | 🏅 Detect all-time personal records, flag newly broken ones |

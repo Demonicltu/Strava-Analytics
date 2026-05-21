@@ -230,6 +230,7 @@ strava-extractor/
     ├── update_strava.ts  # npm run update
     ├── fast.ts           # npm run fast (all-in-one)
     ├── bulk_fetch.ts     # npm run bulk (2-year history fetch+crunch)
+    ├── recrunch.ts       # npm run recrunch (re-crunch from existing downloads)
     ├── compare.ts        # npm run compare (AI trend analysis)
     ├── digest.ts         # npm run digest (weekly/monthly digest + overtraining check)
     ├── records.ts        # npm run records (personal records tracker)
@@ -371,6 +372,25 @@ npm run bulk
 
 ---
 
+### `npm run recrunch` — Re-crunch existing downloads
+
+```bash
+npm run recrunch           # re-crunch ALL output/*.json files (picks up new metrics)
+npm run recrunch -- --new  # only crunch files missing a _crunched.json (faster)
+```
+
+**What it does:**
+- Reads all existing `output/*.json` files (no Strava API calls)
+- Re-runs `crunch` on each one, overwriting `analysis/*_crunched.json`
+- Use this after updating the crunching logic or rider config — no need to re-download from Strava
+- `--new` flag skips any activity that already has a `_crunched.json` (safe incremental mode)
+
+**Output:** Updated `analysis/*_crunched.json` for each activity
+
+**Note:** Run `npm run records` and `npm run dashboard` afterwards to refresh derived files.
+
+---
+
 ### `npm run compare` — AI fitness trend analysis
 
 ```bash
@@ -482,6 +502,13 @@ npm run digest        # weekly digest with overtraining check + race predictions
 npm run dashboard     # regenerate HTML dashboard
 ```
 
+### After updating rider config
+```bash
+npm run recrunch      # recompute all historical metrics with new FTP/weight/HR values
+npm run records       # refresh personal records database
+npm run dashboard     # regenerate HTML dashboard
+```
+
 ---
 
 ## Quick reference
@@ -494,6 +521,7 @@ npm run dashboard     # regenerate HTML dashboard
 | `npm run analyze` | AI writes analysis (+ history + Garmin + PR check) | Pick crunched file | `analysis/*_analysis.md` |
 | `npm run update` | Push to Strava | Pick crunched file | Updates Strava activity |
 | **`npm run bulk`** | **Fetch + crunch 2 years** | **None** | `output/*.json` + `analysis/*_crunched.json` |
+| **`npm run recrunch`** | **Re-crunch all downloads** | **None** | `analysis/*_crunched.json` (refreshed) |
 | **`npm run compare`** | **AI trend analysis** | **Pick period** | `analysis/comparison_*.md` |
 | **`npm run digest`** | **Weekly digest + overtraining check + race predictions** | **Pick weeks** | `analysis/digest_*w_*.md` |
 | **`npm run records`** | **Personal records tracker** | **None** | `analysis/personal_records.json` |
@@ -510,6 +538,7 @@ npm run dashboard     # regenerate HTML dashboard
 - **Large activities:** The `crunch` step handles any size — it processes all data points locally, no sampling.
 - **Gemini free tier:** The enriched payload (crunched + history + Garmin) is typically 15–40 KB, well under the free tier limit.
 - **Re-running:** You can re-run any step independently. `crunch` overwrites the previous crunched file. `analyze` overwrites the analysis. `update` always previews before pushing.
+- **Updating rider config:** If you change `RIDER_FTP_W`, `RIDER_WEIGHT_KG`, or `RIDER_MAX_HR`, run `npm run recrunch` to recompute all historical metrics with the new values — no API calls needed.
 - **Description vs Notes:** Description (public) contains the full analysis. Private notes (only you) contain short actionable tips — optimized for mobile viewing.
 - **Rider config:** Set `RIDER_WEIGHT_KG`, `RIDER_FTP_W`, `RIDER_MAX_HR`, `RIDER_LTHR` in `.env` for advanced metrics. For running, optionally set `RUNNER_RFTP_W`, `RUNNER_MAX_HR`, `RUNNER_LTHR`. Without FTP, IF/TSS/power zones won't be computed.
 - **Garmin MFA:** First login sends a one-time code to your email. Enter it in the terminal. After that the session is cached and no more MFA prompts until the session expires (typically weeks).
