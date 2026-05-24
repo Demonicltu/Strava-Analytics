@@ -238,16 +238,18 @@ def fetch_day(api: Garmin, date_str: str) -> dict:
 
     # ── VO2max — not returned by this API, skipped ──
 
-    # ── Body Battery intraday (start/end of day) ──
+    # ── Body Battery intraday (start/end of day + full array for activity-time lookup) ──
     battery = safe_get(api.get_body_battery, date_str, date_str, label="body battery intraday")
     if battery and isinstance(battery, list) and len(battery) > 0:
         day_data = battery[0] if isinstance(battery[0], dict) else {}
         try:
-            vals = [v[1] for v in day_data.get("bodyBatteryValuesArray", [])
-                    if isinstance(v, list) and len(v) > 1 and v[1] is not None]
-            if vals:
-                record["body_battery_start_of_day"] = vals[0]
-                record["body_battery_end_of_day"] = vals[-1]
+            pairs = [[v[0], v[1]] for v in day_data.get("bodyBatteryValuesArray", [])
+                     if isinstance(v, list) and len(v) > 1 and v[1] is not None]
+            if pairs:
+                record["body_battery_start_of_day"] = pairs[0][1]
+                record["body_battery_end_of_day"] = pairs[-1][1]
+                # Store full intraday array [timestamp_ms, value] for activity-time lookup
+                record["body_battery_intraday"] = pairs
         except Exception:
             pass
 

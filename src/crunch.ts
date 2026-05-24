@@ -127,12 +127,18 @@ export function crunchActivity(raw: any, rider: RiderConfig, garminRestHr?: numb
   // ═══ Pogačar / Kipchoge Score ═══
   let pogacarScore: any = null;
   if (isRide) {
+    const IF_for_ref = (rider.ftpW && rider.ftpW > 0 && normalizedPower)
+      ? normalizedPower / rider.ftpW : null;
+
     let speedRef: number, refLabel: string;
-    if (isVirtual) { speedRef = 0; refLabel = "Virtual Ride (power only)"; }
-    else if (elev > 1500) { speedRef = 24; refLabel = "Race (Mountain Stage)"; }
-    else if (elev > 500) { speedRef = 30; refLabel = "Hilly Ride"; }
-    else if (avgHR > 155) { speedRef = 41.5; refLabel = "Race (Flat/Rolling)"; }
-    else { speedRef = 34; refLabel = "Solo Training"; }
+    if (isVirtual)                                               { speedRef = 0;    refLabel = "Virtual Ride (power only)"; }
+    else if (elev > 1500)                                        { speedRef = 24;   refLabel = "Race (Mountain Stage)"; }
+    else if (elev > 500)                                         { speedRef = 30;   refLabel = "Hilly Ride"; }
+    else if (avgHR > 155 || (IF_for_ref && IF_for_ref >= 0.9))  { speedRef = 41.5; refLabel = "Race (Flat/Rolling)"; }
+    else if (IF_for_ref && IF_for_ref >= 0.8)                   { speedRef = 34;   refLabel = "Solo Training / Tempo"; }
+    else if (IF_for_ref && IF_for_ref >= 0.65)                  { speedRef = 28;   refLabel = "Endurance Ride"; }
+    else if (IF_for_ref !== null)                               { speedRef = 24;   refLabel = "Easy / Recovery Ride"; }
+    else                                                         { speedRef = 34;   refLabel = "Solo Training"; }
 
     const metrics: any = {};
     // Weighted composite: primary metric = 50%, secondaries share remaining 50%
@@ -154,12 +160,13 @@ export function crunchActivity(raw: any, rider: RiderConfig, garminRestHr?: numb
       primaryPct = round(summary.average_speed_kmh / speedRef * 100);
       metrics.speed = `${summary.average_speed_kmh} / ${speedRef} km/h → ${primaryPct}%`;
     }
-    // Efficiency Factor: NP/avgHR — Pogačar reference ~440W / ~150 avg HR ≈ 2.9 W/bpm (grand tour avg HR, rough estimate)
+    // Efficiency Factor: NP/avgHR — Pogačar reference ~380W NP / ~165 bpm grand-tour avg HR ≈ 2.3 W/bpm
+    // (Updated from old 2.9 estimate which assumed 440W/150bpm — unrealistically low HR for race context)
     if (normalizedPower && avgHR > 0) {
       const ef = round(normalizedPower / avgHR, 2);
-      const pogacarEf = 2.9;
+      const pogacarEf = 2.3;
       const pct = round(ef / pogacarEf * 100);
-      metrics.efficiency = `${ef} / ${pogacarEf} W/bpm → ${pct}% (rough estimate)`;
+      metrics.efficiency = `${ef} / ${pogacarEf} W/bpm → ${pct}%`;
       secondaryPcts.push(pct);
     }
     if (elev > 200 && summary.moving_time_seconds > 0) {
@@ -167,11 +174,6 @@ export function crunchActivity(raw: any, rider: RiderConfig, garminRestHr?: numb
       const pogacarVam = 1900;
       const pct = round(vam / pogacarVam * 100);
       metrics.climbing = `${vam} / ${pogacarVam} VAM → ${pct}%`;
-      secondaryPcts.push(pct);
-    }
-    if (summary.average_cadence) {
-      const pct = round(summary.average_cadence / 90 * 100);
-      metrics.cadence = `${round(summary.average_cadence)} / 90 rpm → ${pct}%`;
       secondaryPcts.push(pct);
     }
     let compositePct: number | null = null;
@@ -221,6 +223,9 @@ export function crunchActivity(raw: any, rider: RiderConfig, garminRestHr?: numb
     };
   }
 
+  // ═══ Amateur / Category Score — computed after vamAnalysis (see below) ═══
+  let amateurScore: any = null;
+
   // Derive local UTC offset from start_date (UTC) vs start_date_local
   const startUtc = raw.detailed_activity?.start_date ?? raw.activity_summary?.date;
   const startLocal = raw.activity_summary?.date;
@@ -235,6 +240,7 @@ export function crunchActivity(raw: any, rider: RiderConfig, garminRestHr?: numb
   const summaryCard: any = {
     type: summary.sport_type,
     date: new Date(summary.date).toLocaleDateString("en-US", { weekday: "long", year: "numeric", month: "long", day: "numeric" }),
+    start_date_local: raw.detailed_activity?.start_date_local ?? raw.activity_summary?.date ?? null,
     moving_time: formatDuration(summary.moving_time_seconds),
     moving_time_seconds: summary.moving_time_seconds,
     elapsed_time: formatDuration(summary.elapsed_time_seconds),
@@ -463,7 +469,7 @@ export function crunchActivity(raw: any, rider: RiderConfig, garminRestHr?: numb
   const bestPowerRaw: Record<string, number> = {};
   if (powerValues.length > 0) {
     const pArr = movingRows.map((r: any) => r.power_watts || 0);
-    for (const [d, l] of [[5, "5s"], [10, "10s"], [30, "30s"], [60, "1min"], [300, "5min"], [600, "10min"], [1200, "20min"]] as [number, string][]) {
+    for (const [d, l] of [[5, "5s"], [10, "10s"], [30, "30s"], [60, "1min"], [300, "5min"], [600, "10min"], [1200, "20min"], [3600, "60min"], [5400, "90min"]] as [number, string][]) {
       const v = bestRollingAvg(pArr, d);
       if (v) { bestPower[l] = `${v} W`; bestPowerRaw[l] = v; }
     }
@@ -1012,6 +1018,144 @@ export function crunchActivity(raw: any, rider: RiderConfig, garminRestHr?: numb
     };
   }
 
+  // ═══ Runner Category Score ═══
+  let runnerScore: any = null;
+  if (isRun && summary.average_speed_kmh > 0) {
+    // Tiers ordered from BEST (Elite) to WORST (Beginner). Find first tier where pace is SLOWER than the ceiling.
+    const RUN_TIERS = [
+      { label: "Elite / Pro",        paceMax: 200,  econMax: 0.95, cadMax: 185 }, // <3:20/km
+      { label: "Sub-Elite",          paceMax: 240,  econMax: 1.10, cadMax: 180 }, // <4:00/km
+      { label: "Competitive",        paceMax: 300,  econMax: 1.40, cadMax: 178 }, // <5:00/km
+      { label: "Strong Amateur",     paceMax: 360,  econMax: 1.80, cadMax: 175 }, // <6:00/km
+      { label: "Trained Amateur",    paceMax: 450,  econMax: 2.50, cadMax: 170 }, // <7:30/km
+      { label: "Recreational",       paceMax: 600,  econMax: 3.50, cadMax: 165 }, // <10:00/km
+      { label: "Beginner",           paceMax: 9999, econMax: 4.50, cadMax: 160 }, // 10:00+/km
+    ];
+
+    const paceSecPerKm = round(3600 / summary.average_speed_kmh);
+    let tierIdx = RUN_TIERS.findIndex(t => paceSecPerKm < t.paceMax);
+    if (tierIdx === -1) tierIdx = RUN_TIERS.length - 1;
+    const tier = RUN_TIERS[tierIdx];
+
+    const catMetrics: any = {};
+    // Pace (primary) — % of tier ceiling (faster pace = higher %)
+    const pacePct = round(Math.min(tier.paceMax / paceSecPerKm * 100, 115));
+    catMetrics.pace = `${formatPace(summary.average_speed_kmh)} / ${formatPace(3600 / tier.paceMax)} ceiling → ${pacePct}%`;
+    const catSecs: number[] = [];
+
+    // Economy (secondary) — pace_sec/HR, lower = better runner
+    if (avgHR > 0) {
+      const yourEcon = round(paceSecPerKm / avgHR, 3);
+      const econPct = round(Math.min(tier.econMax / yourEcon * 100, 115));
+      catMetrics.economy = `${yourEcon} s/km/bpm (ceiling ${tier.econMax}) → ${econPct}%`;
+      catSecs.push(econPct);
+    }
+
+    // Cadence (secondary)
+    if (summary.average_cadence) {
+      const avgSpm = round(summary.average_cadence * 2);
+      const cadPct = round(Math.min(avgSpm / tier.cadMax * 100, 115));
+      catMetrics.cadence = `${avgSpm} / ${tier.cadMax} spm ceiling → ${cadPct}%`;
+      catSecs.push(cadPct);
+    }
+
+    const secAvg = catSecs.length > 0 ? catSecs.reduce((a, b) => a + b, 0) / catSecs.length : pacePct;
+    const catComposite = round(pacePct * 0.5 + secAvg * 0.5);
+    const nearPromotion = catComposite !== null && catComposite >= 88 && tierIdx > 0;
+    const runTierPos = catComposite === null ? "Unknown"
+      : catComposite >= 88 ? "Top of tier 🔝"
+      : catComposite >= 70 ? "Mid–Upper tier"
+      : catComposite >= 50 ? "Mid tier"
+      : "Lower tier";
+
+    runnerScore = {
+      composite_pct: catComposite,
+      category: tier.label,
+      tier_position: runTierPos,
+      metrics: catMetrics,
+      near_promotion: nearPromotion,
+      next_category: nearPromotion ? RUN_TIERS[tierIdx - 1].label : null,
+    };
+  }
+
+  // ═══ Amateur / Category Score (uses vamAnalysis.best_vam_climb) ═══
+  if (isRide) {
+    const TIERS = [
+      { label: "Beginner",              ftpMax: 2.0,  speedMax: 22,  efMax: 1.10, vamMax: 500  },
+      { label: "Cat 5 / Recreational",  ftpMax: 2.5,  speedMax: 26,  efMax: 1.35, vamMax: 700  },
+      { label: "Cat 4 / Trained",       ftpMax: 3.2,  speedMax: 30,  efMax: 1.55, vamMax: 1000 },
+      { label: "Cat 3 / Strong",        ftpMax: 4.0,  speedMax: 35,  efMax: 1.75, vamMax: 1400 },
+      { label: "Cat 2 / Elite Amateur", ftpMax: 5.0,  speedMax: 40,  efMax: 2.10, vamMax: 1700 },
+      { label: "Cat 1 / Semi-Pro",      ftpMax: 6.0,  speedMax: 44,  efMax: 2.30, vamMax: 1900 },
+      { label: "Pro",                   ftpMax: 99,   speedMax: 60,  efMax: 3.00, vamMax: 2400 },
+    ];
+
+    const ftpWkg = (rider.ftpW && rider.ftpW > 0 && rider.weightKg && rider.weightKg > 0)
+      ? rider.ftpW / rider.weightKg : null;
+
+    let tierIdx = ftpWkg !== null
+      ? TIERS.findIndex(t => (ftpWkg as number) < t.ftpMax)
+      : TIERS.findIndex(t => summary.average_speed_kmh < t.speedMax);
+    if (tierIdx === -1) tierIdx = TIERS.length - 1;
+    const tier = TIERS[tierIdx];
+
+    const catMetrics: any = {};
+    let catPrimary: number | null = null;
+    const catSecs: number[] = [];
+
+    // Power (primary, 50%)
+    if (hasPowerMeter && summary.average_watts && rider.weightKg && rider.weightKg > 0) {
+      const refW = tier.ftpMax * rider.weightKg;
+      const pct = round(Math.min(summary.average_watts / refW * 100, 120));
+      catPrimary = pct;
+      catMetrics.power = `${Math.round(summary.average_watts)} W (${round(summary.average_watts / rider.weightKg, 2)} W/kg) / ${tier.ftpMax} W/kg ceiling → ${pct}%`;
+    } else if (!isVirtual && summary.average_speed_kmh > 0) {
+      const pct = round(Math.min(summary.average_speed_kmh / tier.speedMax * 100, 115));
+      catPrimary = pct;
+      catMetrics.speed = `${summary.average_speed_kmh} / ${tier.speedMax} km/h ceiling → ${pct}%`;
+    }
+
+    // EF (secondary)
+    if (normalizedPower && avgHR > 0) {
+      const ef = round(normalizedPower / avgHR, 2);
+      const pct = round(Math.min(ef / tier.efMax * 100, 115));
+      catMetrics.efficiency = `${ef} / ${tier.efMax} W/bpm ceiling → ${pct}%`;
+      catSecs.push(pct);
+    }
+
+    // VAM (secondary) — use BEST CLIMB VAM, not overall VAM.
+    // Overall VAM = total_ascent/total_time collapses to near-zero on flat rides.
+    // Best climb VAM reflects actual climbing ability on the hardest ascent.
+    const bestClimbVam: number | null = vamAnalysis?.best_vam_climb?.vam ?? null;
+    if (bestClimbVam !== null && elev > 200) {
+      const pct = round(Math.min(bestClimbVam / tier.vamMax * 100, 115));
+      catMetrics.climbing = `${bestClimbVam} / ${tier.vamMax} VAM ceiling → ${pct}% (best climb)`;
+      catSecs.push(pct);
+    }
+
+    let catComposite: number | null = null;
+    if (catPrimary !== null) {
+      const secAvg = catSecs.length > 0
+        ? catSecs.reduce((a, b) => a + b, 0) / catSecs.length
+        : catPrimary;
+      catComposite = round(catPrimary * 0.5 + secAvg * 0.5);
+    } else if (catSecs.length > 0) {
+      catComposite = round(catSecs.reduce((a, b) => a + b, 0) / catSecs.length);
+    }
+
+    const nearPromotion = catComposite !== null && catComposite >= 88 && tierIdx < TIERS.length - 1;
+    amateurScore = {
+      composite_pct: catComposite,
+      category: tier.label,
+      detection_method: ftpWkg !== null
+        ? `FTP ${rider.ftpW}W / ${rider.weightKg}kg = ${round(ftpWkg, 2)} W/kg`
+        : `avg speed ${summary.average_speed_kmh} km/h (no FTP configured)`,
+      metrics: catMetrics,
+      near_promotion: nearPromotion,
+      next_category: nearPromotion ? TIERS[tierIdx + 1].label : null,
+    };
+  }
+
   // ═══ Estimated VO2max ═══
   let vo2max: any = null;
   const vo2Level = (est: number) => {
@@ -1432,6 +1576,8 @@ export function crunchActivity(raw: any, rider: RiderConfig, garminRestHr?: numb
     data_points_analyzed: totalPoints,
     pogacar_score: isSurf ? null : pogacarScore,
     kipchoge_score: kipchogeScore,
+    runner_score: isRun ? runnerScore : null,
+    amateur_score: (isRide && !isSurf) ? amateurScore : null,
     summary_card: summaryCard,
     surf_analysis: surfAnalysis,
     pacing: {

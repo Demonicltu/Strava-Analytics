@@ -61,7 +61,7 @@ function fmtPace(sec: number): string {
   return `${Math.floor(sec / 60)}:${String(Math.round(sec % 60)).padStart(2, "0")}/km`;
 }
 
-function buildRecords(summaries: ActivitySummary[]): PersonalRecords {
+export function buildRecords(summaries: ActivitySummary[]): PersonalRecords {
   const runs = summaries.filter(a => a.sport === "Run");
   const rides = summaries.filter(a => a.sport === "Ride");
 

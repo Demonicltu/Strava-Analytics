@@ -14,7 +14,7 @@ import { getAccessToken } from "./auth.js";
 import { createStravaClient, rateLimitDelay } from "./client.js";
 import { fetchEnrichedActivity } from "./details.js";
 import { crunchActivity, formatDuration } from "./crunch.js";
-import { buildDescription, buildPrivateNotes } from "./format.js";
+import { buildDescription, buildPrivateNotes, buildPersonalScore } from "./format.js";
 import { fetchWeatherMultiPoint, buildWeatherWaypoints } from "./weather.js";
 import { loadAllSummaries, buildHistoricalContext, groupSport, extractSummary, checkPRs } from "./summary_utils.js";
 import { loadWellnessContext } from "./wellness.js";
@@ -317,7 +317,8 @@ async function main() {
     console.log(`${"═".repeat(60)}\n`);
 
     // Load wellness early so garminRestHr is available for crunch (improves VO2max accuracy)
-    const wellnessCtx = loadWellnessContext(ANALYSIS_DIR, dateStr);
+    const actStartIso: string | null = exportData?.detailed_activity?.start_date_local ?? exportData?.detailed_activity?.start_date ?? null;
+    const wellnessCtx = loadWellnessContext(ANALYSIS_DIR, dateStr, actStartIso);
     const garminRestHr = wellnessCtx?.night_before?.resting_hr ?? null;
 
     const crunched = crunchActivity(exportData, rider, garminRestHr);
@@ -338,6 +339,7 @@ async function main() {
     const allSummaries = loadAllSummaries(ANALYSIS_DIR);
     const sport = groupSport(crunched.summary_card?.type ?? "Unknown");
     const historicalCtx = buildHistoricalContext(allSummaries, dateStr, sport);
+    const personalScore = buildPersonalScore(crunched, historicalCtx);
     // wellnessCtx already loaded above
     const summaryForPR = extractSummary(crunched, `activity_${activityId}_${dateStr}_${safeName}_crunched.json`);
     const prCheck = summaryForPR ? checkPRs(allSummaries, summaryForPR) : null;
@@ -404,7 +406,7 @@ async function main() {
     console.log(`  📤 STEP 4/4: Updating Strava activity...`);
     console.log(`${"═".repeat(60)}\n`);
 
-    const description = buildDescription(crunched, analysisText, historicalCtx, wellnessCtx);
+    const description = buildDescription(crunched, analysisText, historicalCtx, wellnessCtx, personalScore);
     const privateNotes = buildPrivateNotes(crunched, analysisText, wellnessCtx);
 
     try {

@@ -59,12 +59,61 @@ function aggregateHrZones(acts: ActivitySummary[]): Record<string, number> | nul
   return Object.fromEntries(Object.entries(totals).map(([z, v]) => [z, Math.round(v / count)]));
 }
 
+// ─── EWMA CTL/ATL/TSB (Banister model) ───
+
+/**
+ * Compute CTL (Chronic Training Load, τ=42d), ATL (Acute Training Load, τ=7d),
+ * and TSB (Training Stress Balance = CTL - ATL) using exponentially weighted moving averages.
+ * Returns the current (latest day) values.
+ */
+function computeCtlAtlTsb(acts: ActivitySummary[]): { ctl: number; atl: number; tsb: number; acwr: number | null } {
+  if (acts.length === 0) return { ctl: 0, atl: 0, tsb: 0, acwr: null };
+
+  // Build a daily load map
+  const dailyLoad: Map<string, number> = new Map();
+  for (const a of acts) {
+    const load = a.trimp ?? a.tss ?? 0;
+    dailyLoad.set(a.date, (dailyLoad.get(a.date) ?? 0) + load);
+  }
+
+  // Sort all unique dates
+  const sortedDates = [...dailyLoad.keys()].sort();
+  if (sortedDates.length === 0) return { ctl: 0, atl: 0, tsb: 0, acwr: null };
+
+  const kCtl = 2 / (42 + 1); // EWMA decay for CTL (42-day)
+  const kAtl = 2 / (7 + 1);  // EWMA decay for ATL (7-day)
+
+  // Iterate day-by-day from earliest to today, filling gaps with 0
+  const start = new Date(sortedDates[0]);
+  const end = new Date();
+  let ctl = 0, atl = 0;
+
+  for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
+    const dateStr = d.toISOString().slice(0, 10);
+    const load = dailyLoad.get(dateStr) ?? 0;
+    ctl = ctl + kCtl * (load - ctl);
+    atl = atl + kAtl * (load - atl);
+  }
+
+  const tsb = Math.round((ctl - atl) * 10) / 10;
+  const ctlR = Math.round(ctl * 10) / 10;
+  const atlR = Math.round(atl * 10) / 10;
+  const acwr = ctlR > 0 ? Math.round((atlR / ctlR) * 100) / 100 : null;
+
+  return { ctl: ctlR, atl: atlR, tsb, acwr };
+}
+
 // ─── Overtraining warning ───
 
 interface OvertTrainingWarning {
   flag: boolean;
+  watch_zone: boolean;
   reason: string;
+  /** ACWR = ATL / CTL (EWMA-based). Safe zone: 0.8–1.3 | Watch zone: 1.3–1.5 | Danger: >1.5 */
   load_ratio: number | null;
+  ctl: number | null;
+  atl: number | null;
+  tsb: number | null;
   hrv_trend: string | null;
 }
 
@@ -72,18 +121,8 @@ function checkOvertTraining(
   acts: ActivitySummary[],
   wellnessByDate: Map<string, any>,
 ): OvertTrainingWarning {
-  // Acute load = sum TRIMP last 7 days, Chronic = avg weekly TRIMP last 4 weeks
-  const now = new Date();
-  const day7 = new Date(now); day7.setDate(day7.getDate() - 7);
-  const day28 = new Date(now); day28.setDate(day28.getDate() - 28);
-
-  const acuteFacts = acts.filter(a => new Date(a.date) >= day7);
-  const chronicActs = acts.filter(a => new Date(a.date) >= day28);
-
-  const acuteLoad = sum(acuteFacts.map(a => a.trimp ?? a.tss ?? 0));
-  const chronicLoad = sum(chronicActs.map(a => a.trimp ?? a.tss ?? 0)) / 4; // per week avg
-
-  const loadRatio = chronicLoad > 0 ? Math.round((acuteLoad / chronicLoad) * 100) / 100 : null;
+  // EWMA-based ACWR: ATL (7d) / CTL (42d)
+  const { ctl, atl, tsb, acwr } = computeCtlAtlTsb(acts);
 
   // HRV trend from wellness (last 7 days)
   const recentDates = [...wellnessByDate.keys()].sort().slice(-7);
@@ -100,14 +139,24 @@ function checkOvertTraining(
     else hrvTrend = "stable";
   }
 
-  const reasons: string[] = [];
-  if (loadRatio !== null && loadRatio > 1.3) reasons.push(`Load ratio ${loadRatio} > 1.3`);
-  if (hrvTrend === "declining") reasons.push("HRV declining over last 7 days");
+  // Thresholds: 0.8–1.3 = sweet spot, 1.3–1.5 = watch zone, >1.5 = danger
+  const dangerReasons: string[] = [];
+  const watchReasons: string[] = [];
+  if (acwr !== null && acwr > 1.5) dangerReasons.push(`ACWR ${acwr} > 1.5 (danger zone — injury risk elevated)`);
+  else if (acwr !== null && acwr > 1.3) watchReasons.push(`ACWR ${acwr} in 1.3–1.5 watch zone — monitor closely`);
+  if (hrvTrend === "declining") dangerReasons.push("HRV declining over last 7 days");
+
+  const flag = dangerReasons.length > 0;
+  const watchZone = !flag && watchReasons.length > 0;
 
   return {
-    flag: reasons.length > 0,
-    reason: reasons.join("; ") || "None",
-    load_ratio: loadRatio,
+    flag,
+    watch_zone: watchZone,
+    reason: [...dangerReasons, ...watchReasons].join("; ") || "None",
+    load_ratio: acwr,
+    ctl: ctl > 0 ? ctl : null,
+    atl: atl > 0 ? atl : null,
+    tsb: ctl > 0 ? tsb : null,
     hrv_trend: hrvTrend,
   };
 }
@@ -232,6 +281,9 @@ function buildDigest(allSummaries: ActivitySummary[], weeks: number, wellnessByD
   const overtTraining = checkOvertTraining(acts, wellnessByDate);
   const racePrediction = racePredictions(acts);
 
+  // CTL/ATL/TSB over full history (needs all history for EWMA warmup, not just digest window)
+  const { ctl, atl, tsb } = computeCtlAtlTsb(allSummaries);
+
   // Training plan adherence (from .env — optional)
   const weeklyTargets: any = {};
   const tgtKm = process.env["WEEKLY_TARGET_KM"] ? parseFloat(process.env["WEEKLY_TARGET_KM"]) : null;
@@ -273,6 +325,16 @@ function buildDigest(allSummaries: ActivitySummary[], weeks: number, wellnessByD
     sport_summary: sportSummary,
     weekly_breakdown: weeklyBreakdown,
     overtraining_warning: overtTraining,
+    /** CTL/ATL/TSB — Banister model, EWMA over full training history.
+     *  CTL (τ=42d) = Fitness, ATL (τ=7d) = Fatigue, TSB = Form (CTL-ATL).
+     *  TSB>+10 = fresh/undertrained, -10 to +10 = optimal, <-10 = fatigued */
+    fitness_fatigue: (ctl !== null && ctl > 0) ? {
+      ctl_fitness: ctl,
+      atl_fatigue: atl,
+      tsb_form: tsb,
+      acwr: overtTraining.load_ratio,
+      tsb_label: (tsb ?? 0) > 10 ? "Fresh / Undertrained" : (tsb ?? 0) >= -10 ? "Optimal Training Form" : "Fatigued — consider recovery",
+    } : null,
     race_predictions: racePrediction,
     garmin_wellness_summary: wellnessSummary,
     ...(trainingAdherence ? { training_plan_adherence: trainingAdherence } : {}),
@@ -363,8 +425,11 @@ async function main() {
 
   if (digest.error) { console.error("❌", digest.error); process.exit(1); }
   if (digest.overtraining_warning.flag) {
-    console.log(`\n⚠️  OVERTRAINING WARNING: ${digest.overtraining_warning.reason}`);
-    console.log(`   Load ratio: ${digest.overtraining_warning.load_ratio ?? "N/A"} | HRV trend: ${digest.overtraining_warning.hrv_trend ?? "N/A"}\n`);
+    console.log(`\n⚠️  OVERTRAINING DANGER: ${digest.overtraining_warning.reason}`);
+    console.log(`   ACWR: ${digest.overtraining_warning.load_ratio ?? "N/A"} | HRV trend: ${digest.overtraining_warning.hrv_trend ?? "N/A"}\n`);
+  } else if (digest.overtraining_warning.watch_zone) {
+    console.log(`\n⚡ WATCH ZONE: ${digest.overtraining_warning.reason}`);
+    console.log(`   ACWR: ${digest.overtraining_warning.load_ratio ?? "N/A"} | HRV trend: ${digest.overtraining_warning.hrv_trend ?? "N/A"}\n`);
   }
 
   const jsonPayload = JSON.stringify(digest, null, 2);

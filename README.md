@@ -67,8 +67,8 @@ npm run garmin
 
 | Activity | Score | Metrics |
 |----------|-------|---------|
-| 🚴 **Cycling** (Road, Gravel, MTB, E-Bike, Virtual) | 🏆 Pogačar Score | NP, IF, TSS, W/kg, Power Zones, Cadence Zones, Torque, VAM, Gradient |
-| 🏃 **Running** (Road, Trail, Virtual) | 🏆 Kipchoge Score | Pace, Best Efforts, Power (if available), IF, TSS, HR Zones (LTHR), Cadence Zones |
+| 🚴 **Cycling** (Road, Gravel, MTB, E-Bike, Virtual) | 🏅 Category Score + Pogačar Factor | NP, IF, TSS, W/kg, Power Zones, Cadence Zones, Torque, VAM, Gradient |
+| 🏃 **Running** (Road, Trail, Virtual) | 🏅 Runner Category Score + Kipchoge Factor | Pace, Best Efforts, Power (if available), IF, TSS, HR Zones (LTHR), Cadence Zones |
 | 🏋️ **Workout** (HIIT, Strength, CrossFit, Yoga…) | 🏋️ Workout Score (WIS) | HR Zones, Interval Detection, HR Recovery Rate, Consistency, EPOC |
 | 🚶 **Walking / Hiking** | — | HR analysis (maxHR%), Heart Points, Elevation, Speed Zones, Cadence Zones |
 | 🏄 **Surfing** | — | Wave count, Max wave speed, Paddle/Ride ratio, Speed zones |
@@ -117,7 +117,8 @@ All metrics are computed locally from raw stream data. No sampling — every dat
 - 💨 **Wind Analysis** — headwind / tailwind / crosswind % per segment, net wind effect (km/h); one weather API call per UTC hour spanned
 
 ### Cycling Metrics (power meter recommended)
-- 🏆 **Pogačar Score** — composite % vs Tadej Pogačar (speed, power, efficiency, VAM, cadence)
+- 🏅 **Category Score** — 7-tier system (Beginner → Pro) scoring your ride vs your own tier's ceiling (FTP W/kg-based). 100% = at next tier's door. Includes `tier_position` label (Mid tier / Top of tier 🔝 etc.)
+- 🏆 **Pogačar Factor** — composite % vs Tadej Pogačar (speed, power, efficiency, VAM) — fun-fact footnote
 - ⚡ **Normalized Power (NP)** — physiological cost of the ride
 - ⚙️ **IF / TSS** — Intensity Factor & Training Stress Score (uses `RIDER_FTP_W`)
 - 💪 **W/kg** — power-to-weight with level classification
@@ -129,7 +130,8 @@ All metrics are computed locally from raw stream data. No sampling — every dat
 - 🔄 **Power Skills** — sprint/attack/climbing strength profile
 
 ### Running Metrics
-- 🏆 **Kipchoge Score** — composite % vs Kipchoge (pace, running economy, cadence)
+- 🏅 **Runner Category Score** — 7-tier system (Beginner → Elite/Pro) scoring vs your pace tier's ceiling. Same structure as cycling Category Score, includes `tier_position`.
+- 🏆 **Kipchoge Factor** — composite % vs Eliud Kipchoge (pace, running economy, cadence) — fun-fact footnote
 - 🏅 **Best Efforts** — PRs at standard distances (400m → 10K)
 - ⚙️ **IF / TSS / Power Zones** — when running power meter present (uses `RUNNER_RFTP_W`)
 

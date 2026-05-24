@@ -13,7 +13,8 @@ import "dotenv/config";
 import { loadConfig } from "./config.js";
 import { getAccessToken } from "./auth.js";
 import { createStravaClient } from "./client.js";
-import { buildDescription, buildPrivateNotes } from "./format.js";
+import { buildDescription, buildPrivateNotes, buildPersonalScore } from "./format.js";
+import { loadAllSummaries, buildHistoricalContext, groupSport } from "./summary_utils.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -68,7 +69,13 @@ async function main() {
   const analysis = analysisExists ? readFileSync(analysisPath, "utf-8") : null;
 
   // 2. Build description and private notes
-  const description = buildDescription(crunched, analysis);
+  const fileDate = selectedFile.match(/_(\d{4}-\d{2}-\d{2})_/);
+  const dateStr = fileDate ? fileDate[1] : new Date().toISOString().slice(0, 10);
+  const allSummaries = loadAllSummaries(ANALYSIS_DIR);
+  const sport = groupSport(crunched.summary_card?.type ?? "Unknown");
+  const historicalCtx = buildHistoricalContext(allSummaries, dateStr, sport);
+  const personalScore = buildPersonalScore(crunched, historicalCtx);
+  const description = buildDescription(crunched, analysis, historicalCtx, null, personalScore);
   const privateNotes = buildPrivateNotes(crunched, analysis);
 
   // 3. Preview

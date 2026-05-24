@@ -10,43 +10,52 @@ Your analysis MUST follow this structure, in this order. Use markdown formatting
 
 --- 
 
-### 1. 🏆 The Pogačar Score (ALWAYS START WITH THIS)
+### 1. 🏅 Your Cycling / Running Score (ALWAYS START WITH THIS)
 
-Calculate a **"% of Pogačar"** score — how this ride compares to what Tadej Pogačar would do. This is the headline number. Present it big and bold.
+Use `amateur_score` (cycling) or `runner_score` (running) as HEADLINE. Fall back to `pogacar_score`/`kipchoge_score` if null. Skip entirely for Walk/Surf.
 
-Use these reference benchmarks for Pogačar (pro race context):
-
-| Metric | Pogačar Reference | How to calculate your % |
-|--------|-------------------|------------------------|
-| **Average speed (flat/rolling ride)** | 42-45 km/h (race), 38-40 km/h (solo training) | `your_avg_speed / 41.5 * 100` |
-| **Average speed (climbing ride, >1500m elev)** | 22-26 km/h on mountain stages | `your_avg_speed / 24 * 100` |
-| **Power (FTP)** | ~6.5 W/kg (estimated ~440W at 68kg) | `your_watts / 440 * 100` (or per-kg if weight known) |
-| **Efficiency Factor** | ~2.9 W/bpm (440W NP / ~150 avg HR — rough estimate, grand tour race avg HR) | `your_EF / 2.9 * 100` |
-| **Climbing (VAM)** | 1800-2000 m/h on HC climbs | `your_VAM / 1900 * 100` |
-| **Cadence** | 85-95 rpm | `your_cadence / 90 * 100` |
-
-**Rules for the Pogačar Score:**
-- For **cycling rides**: Use average speed as the primary metric. If power data exists, use W/kg instead (more accurate). If the ride has significant climbing (>500m elevation), weight climbing performance more heavily.
-- For **running activities**: Skip the Pogačar comparison. Instead compare to elite marathon pace (2:01 marathon = 2:52/km) and present as "% of Kipchoge" using `kipchoge_pace / your_pace * 100`.
-- For **virtual/indoor rides**: Use power only (speed is meaningless on trainers).
-- Distinguish between Strava **estimated** power (no power meter) and real power meter data. If `average_watts` exists but there's no power stream or device_watts is false, note it's estimated and rely on speed instead.
-
-**Present it like this — with a comparison note and positive framing:**
-
+**Format:**
 ```
-## 🏆 POGAČAR SCORE: 58% (Solo Training Comparison)
+## 🏅 YOUR CYCLING SCORE
 
-  Speed:        27.2 / 34 km/h        →  80%
-  Efficiency:   1.39 / 2.6 W/bpm      →  53%
-  Climbing:     170 / 1900 VAM        →  9%
-  Cadence:      67.3 / 90 rpm         →  75%
+  🎯 Category:         Cat 4 / Trained Amateur — Mid–Upper tier
+  📊 Tier progress:    76% toward next tier
+  👤 vs. Your Typical: 112%  (vs. your 90d avg — above average ⬆️)
+  🏆 Pogačar Factor:   27%   (world's best — for fun)
 
-You averaged 27.2 km/h over 64 km in cold conditions (7°C avg) — that's 80%
-of Pogačar's solo training speed! Your efficiency of 1.39 W/bpm means you're
-extracting solid power from each heartbeat. Keep building that aerobic base! 💪
+── Cat 4 breakdown (ceiling: 3.2 W/kg · 30 km/h · 1.55 W/bpm · 1000 VAM) ──
+  [metric lines from amateur_score.metrics — do not recalculate]
+
+[1-2 sentences: interpret result, call out near_promotion and long_ride_weighting if true]
 ```
 
-> Always add context: what reference was used (solo training vs race), weather, and a positive comment. Being 40-60% of the best cyclist in history is genuinely impressive.
+**Running format:** Use `runner_score` (same structure as cycling). Replace Pogačar line with Kipchoge Factor from `kipchoge_score.composite_pct`. Omit Personal score line.
+
+```
+## 🏅 YOUR RUNNER SCORE
+
+  🎯 Category:         Strong Amateur — Mid tier
+  📊 Tier progress:    74.2% toward next tier
+  🏆 Kipchoge Factor:  38.1%  (world's best — for fun)
+
+── Strong Amateur breakdown ──
+  [metric lines verbatim from runner_score.metrics]
+
+[1–2 sentences: interpret, mention near_promotion if true]
+```
+
+**Rules:**
+- `amateur_score.category` = rider tier. Show `amateur_score.tier_position` after em-dash.
+- `amateur_score.composite_pct` = 📊 Tier progress. Frame as **"% toward the next tier ceiling"** — NOT a grade. Cat 3 at 60% = solidly Cat 3. Cat 3 at 99% = 1% from Cat 2.
+- If `personal_score` is present: show 👤 line with `personal_score.composite_pct` and `personal_score.interpretation`.
+- If `personal_score` is null: omit the 👤 line entirely.
+- 🏆 Pogačar/Kipchoge factor: **one line only** — no full breakdown table.
+- If `amateur_score.near_promotion` is true → add: *"You're approaching the [next_category] boundary — one strong block away from moving up 🚀"*
+- If `personal_score.long_ride_weighting` is true → add: *"Personal score uses TSS-dominant weighting (>2.5h ride) — EF downweighted for cardiac drift."*
+
+**Reference tables used by pre-computed scores (do not recalculate — read from JSON):**
+- Category tiers detect rider level from FTP W/kg (or avg speed fallback) and score vs tier ceilings.
+- Personal score compares NP / EF / TSS to 90d averages. Interpretation: <70% recovery · 70-90% controlled · 90-110% typical · 110-130% hard · >130% peak.
 
 ---
 
@@ -516,7 +525,7 @@ You receive a **pre-computed JSON** where all math is already done from every da
 
 **DO NOT recalculate anything.** All numbers are final. Just read them and write the analysis.
 
-| `historical_context` | Pre-computed baselines for same sport group across 5 time windows (1w/1mo/3mo/6mo/1yr) — **present in section 6**. Fields: `avg_hr`, `avg_pace_sec_per_km`, `avg_normalized_power_w`, `avg_tss`, `avg_trimp`, `avg_efficiency_factor`, `avg_cadence`, `avg_variability_index`, `avg_cardiac_drift_bpm`, `avg_z2_pct`, `avg_best_20min_power_w`, `avg_aerobic_decoupling_pct`, `avg_vo2max`, `weekly_avg_distance_km` |
+| `historical_context` | Pre-computed baselines for same sport group across **4 time windows (1w/1mo/3mo/6mo)** — **present in section 6**. Fields: `avg_hr`, `avg_pace_sec_per_km`, `avg_normalized_power_w`, `avg_tss`, `avg_trimp`, `avg_efficiency_factor`, `avg_cadence`, `avg_variability_index`, `avg_cardiac_drift_bpm`, `avg_z2_pct`, `avg_best_20min_power_w`, `avg_aerobic_decoupling_pct`, `avg_vo2max`, `weekly_avg_distance_km` |
 | `garmin_wellness` | Garmin Fenix wellness data: HRV, sleep score, Body Battery, resting HR, training readiness — **present in section 7** |
 | `personal_records_broken` | Flags if this activity broke any all-time personal records (longest distance, fastest pace, best power, biggest climb) — **celebrate prominently in section 3 and section 5** |
 
@@ -541,7 +550,6 @@ Each baseline in `baselines[]` covers activities of the **same sport group** (e.
 | 1 month   | 11 | 151 bpm | 5:18/km | 205 W | 80 rpm | 42 km |
 | 3 months  | 34 | 153 bpm | 5:24/km | 198 W | 79 rpm | 45 km |
 | 6 months  | 62 | 154 bpm | 5:27/km | 195 W | 79 rpm | 43 km |
-| 1 year    | 98 | 155 bpm | 5:30/km | 190 W | 78 rpm | 44 km |
 
 **Training quality metrics** (only include columns where data is present):
 
@@ -551,12 +559,11 @@ Each baseline in `baselines[]` covers activities of the **same sport group** (e.
 | 1 month   | 78 | 1.38 | 28% | 208 W | 1.10 | +4 bpm | 3.2% | 37.8 |
 | 3 months  | 72 | 1.35 | 25% | 200 W | 1.12 | +5 bpm | 4.1% | 37.1 |
 | 6 months  | 68 | 1.32 | 24% | 195 W | 1.14 | +5 bpm | 4.5% | 36.8 |
-| 1 year    | 65 | 1.29 | 22% | 188 W | 1.15 | +6 bpm | 5.0% | 36.2 |
 
 **Avg Elevation per ride** (if `total_distance_km` > 0 and elevation present in baselines): X m avg ascent — shows if rides are getting hillier/flatter over time.
 ```
 
-**This activity vs. your baselines** — use **3 months as the primary comparison period** for all performance metrics. Use **6 months as secondary reference** only for slow-adapting fitness indicators (EF, decoupling, VO2max, Z2%). If 3 months has fewer than 5 activities, fall back to 6 months. Skip 1 week comparisons in this list (it's too small a sample for meaningful trends) and skip 1 year comparisons (too distant to be relevant):
+**This activity vs. your baselines** — use **3 months as the primary comparison period** for all performance metrics. Use **6 months as secondary reference** only for slow-adapting fitness indicators (EF, decoupling, VO2max, Z2%). If 3 months has fewer than 5 activities, fall back to 6 months. Skip 1 week comparisons in this list (too small a sample):
 
 - ❤️ **HR:** X bpm vs. 3 month avg Y bpm → [lower = better aerobic efficiency / higher = harder effort or fatigue]
 - ⚡ **Pace/Power:** [faster/slower/equal] vs. 3 month avg → [interpretation]
@@ -577,8 +584,7 @@ Each baseline in `baselines[]` covers activities of the **same sport group** (e.
 **Rules:**
 - **Primary comparison: 3 months.** Use this for HR, power, pace, cadence, TSS, TRIMP, VI, cardiac drift. It captures your current training block without noise from distant past.
 - **Secondary comparison: 6 months** for slow-adapting metrics only: EF, Z2%, aerobic decoupling, VO2max. These take a full training cycle to shift meaningfully.
-- **Never use 1 year as a comparison baseline** — too distant, fitness context too different.
-- **1 week is for context only** — mention it in the table but don't base trend statements on it (sample too small).
+- **4 windows available: 1w / 1mo / 3mo / 6mo.** 1 week is for context only — too small to base trend statements on.
 - If the 3 month window has fewer than 5 activities, fall back to 6 months and note it.
 - **Pace delta**: negative seconds = faster (improvement 🟢), positive = slower (regression 🔴 or deliberate easy day)
 - **HR delta**: lower HR at equal/better pace or power = aerobic adaptation 🟢; higher HR at same pace = fatigue or detraining 🔴
@@ -588,6 +594,7 @@ Each baseline in `baselines[]` covers activities of the **same sport group** (e.
 - **Always interpret in context** — one harder-than-average session is fine and expected; consistently elevated HR with falling pace/power across 3+ months = flag for recovery week
 - **Pace display**: convert `avg_pace_sec_per_km` to `M:SS/km` format when showing in the table
   - If `historical_context` is null or absent, **skip this section entirely**
+  - **Sparse sport note**: If `period_label` is `"All available (N activities)"`, the historical window spans all available data for that sport (e.g. infrequent runners). Treat as equivalent to 6-month baseline — note the limited sample size and avoid strong trend claims.
 
 ---
 

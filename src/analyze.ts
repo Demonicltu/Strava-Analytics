@@ -5,6 +5,7 @@ import { fileURLToPath } from "url";
 import "dotenv/config";
 import { loadAllSummaries, buildHistoricalContext, groupSport, extractSummary, checkPRs } from "./summary_utils.js";
 import { loadWellnessContext } from "./wellness.js";
+import { buildPersonalScore } from "./format.js";
 
 let __dirname2: string;
 try { __dirname2 = dirname(fileURLToPath(import.meta.url)); } catch { __dirname2 = process.cwd(); }
@@ -267,6 +268,7 @@ async function main() {
 
   // Historical context enrichment
   const historicalCtx = loadHistoricalContext(selectedFile, crunchedData);
+  const personalScore = buildPersonalScore(crunchedData, historicalCtx);
   let payload: string;
 
   // PR check
@@ -281,7 +283,11 @@ async function main() {
   // Wellness context (Garmin)
   const fileDate = selectedFile.match(/_(\d{4}-\d{2}-\d{2})_/);
   const actDate = fileDate ? fileDate[1] : null;
-  const wellnessCtx = actDate ? loadWellnessContext(ANALYSIS_DIR, actDate) : null;
+   // Try to get activity start time from crunched data for accurate body battery lookup
+  const crunchedParsed = JSON.parse(crunchedData);
+  const actStartIso: string | null = crunchedParsed?.summary_card?.start_date_local
+    ?? crunchedParsed?.activity_meta?.start_date_local ?? null;
+  const wellnessCtx = actDate ? loadWellnessContext(ANALYSIS_DIR, actDate, actStartIso) : null;
 
   if (historicalCtx) {
     const ctx = historicalCtx as any;
@@ -301,6 +307,7 @@ async function main() {
     {
       activity_data: JSON.parse(crunchedData),
       ...(historicalCtx ? { historical_context: historicalCtx } : {}),
+      ...(personalScore ? { personal_score: personalScore } : {}),
       ...(wellnessCtx ? { garmin_wellness: wellnessCtx } : {}),
       ...(prCheck && prCheck.pr_labels.length > 0 ? { personal_records_broken: prCheck } : {}),
     },

@@ -33,16 +33,25 @@ You are writing a **weekly training digest** — a structured Sunday-review styl
 Check `overtraining_warning` in the data. If `flag: true`, **lead with this prominently**:
 
 ```
-## ⚠️ OVERTRAINING RISK DETECTED
+## ⚠️ OVERTRAINING DANGER
 
-Load ratio: X.XX (>1.3 = danger zone)
+ACWR: X.XX (>1.5 = danger zone — injury risk elevated)
 HRV trend: declining over last 7 days
 
 → Recommended action: [1-2 specific sentences — reduce volume by X%, take Z days easy, etc.]
 ```
 
-If `flag: false` and load ratio < 0.8, note if training is too easy / detraining risk.
-If no warning, briefly mention load ratio is healthy and continue.
+If `watch_zone: true` (ACWR 1.3–1.5), flag it but less alarmingly:
+
+```
+## ⚡ WATCH ZONE — Load Building Up
+
+ACWR: X.XX (1.3–1.5 = watch zone — monitor closely, avoid sudden extra load)
+→ Suggested: keep intensity steady, ensure ≥1 easy day before the next hard session.
+```
+
+If `flag: false` and `watch_zone: false` and ACWR < 0.8, note if training is too easy / detraining risk.
+If load looks healthy, briefly mention ACWR is in the safe zone (0.8–1.3) and continue.
 
 ---
 
@@ -89,7 +98,35 @@ Z5 VO2max    █ 10%
 
 ---
 
-### 5. 🎯 Race Predictions (if `race_predictions` is present)
+### 5. 📊 Fitness & Form (CTL/ATL/TSB) — if `fitness_fatigue` is present
+
+The Banister model (EWMA over full training history):
+- **CTL** = Chronic Training Load (τ=42d) = *Fitness* — higher = more base fitness built
+- **ATL** = Acute Training Load (τ=7d) = *Fatigue* — elevated after hard recent training
+- **TSB** = Form = CTL − ATL. Positive = fresh, negative = fatigued
+
+```
+## 📊 FITNESS & FORM
+
+| Metric | Value | Interpretation |
+|--------|-------|----------------|
+| 🏋️ CTL (Fitness) | X.X | Base fitness level |
+| 😓 ATL (Fatigue) | X.X | Recent training load |
+| 🎯 TSB (Form) | X.X | Fresh / Optimal / Fatigued |
+| ⚡ ACWR | X.XX | Risk ratio (safe = 0.8–1.3) |
+```
+
+- **TSB > +10**: Fresh — good for racing/testing, risk of undertraining if sustained
+- **TSB -10 to +10**: Optimal training form — keep building
+- **TSB < -10**: Carrying fatigue — manage intensity, watch HRV
+
+> Note: CTL/ATL/TSB use TRIMP (HR-based) or TSS (power-based) depending on what's available. Cross-sport comparison is approximate.
+
+If absent, skip this section.
+
+---
+
+### 6. 🎯 Race Predictions (if `race_predictions` is present)
 
 ```
 ## 🎯 RACE PREDICTIONS (Riegel Formula from recent bests)
@@ -110,7 +147,7 @@ If absent, skip this section entirely.
 
 ---
 
-### 6. 🛌 Readiness & Recovery Trends (if `garmin_wellness_summary` is present)
+### 7. 🛌 Readiness & Recovery Trends (if `garmin_wellness_summary` is present)
 
 ```
 ## 🛌 READINESS OVERVIEW — Last 7 Days
@@ -130,7 +167,7 @@ If absent, skip this section entirely.
 
 ---
 
-### 7. 📋 Training Plan Adherence (if `training_plan_adherence` is present)
+### 8. 📋 Training Plan Adherence (if `training_plan_adherence` is present)
 
 ```
 ## 📋 TRAINING PLAN ADHERENCE
@@ -150,7 +187,7 @@ If absent (no targets configured), skip this section entirely.
 
 ---
 
-### 8. 💡 Coaching Recommendations (4-6 bullets)
+### 9. 💡 Coaching Recommendations (4-6 bullets)
 
 End with specific, actionable advice. Each point must reference actual numbers from the data.
 
@@ -168,7 +205,7 @@ Format:
 
 1. **No fluff** — every sentence must reference a specific number or fact from the data
 2. **Positive framing** — frame struggles as opportunities, never as failures
-3. **Overtraining warning takes priority** — if load ratio > 1.3, say so clearly and give specific reduction advice
+3. **Overtraining warning takes priority** — if `flag: true` (ACWR > 1.5) or HRV declining, say so clearly; if `watch_zone: true` (ACWR 1.3–1.5), flag but less alarmingly
 4. **Convert pace** — `avg_pace_sec_per_km` → `M:SS/km` format
 5. **Convert times** — use "Xh Xm" not raw seconds
 6. **Skip null sections** — if race_predictions or training_plan_adherence are absent, skip those sections entirely

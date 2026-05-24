@@ -54,8 +54,10 @@ export interface WellnessDay {
 
 export interface WellnessDayOf {
   date: string;
-  // Body Battery at start of activity (approximated as start-of-day value)
+  // Body Battery at start of activity — from intraday lookup if available, else start-of-day
   body_battery_at_start: number | null;
+  // Full intraday array [[timestamp_ms, value], ...] — used for activity-time lookup
+  body_battery_intraday: [number, number][] | null;
   // Stress
   avg_stress: number | null;
   // Steps before activity (approximated as total daily steps — no intraday step split)
@@ -72,6 +74,23 @@ function round1(v: number | null | undefined): number | null {
 function pct(part: number | null | undefined, total: number | null | undefined): number | null {
   if (!part || !total || total === 0) return null;
   return Math.round((part / total) * 100);
+}
+
+/**
+ * Find the body battery value at the closest timestamp to activityStartIso.
+ * intraday: [[timestamp_ms, value], ...]
+ */
+function bodyBatteryAtTime(intraday: [number, number][] | null, activityStartIso: string | null): number | null {
+  if (!intraday || intraday.length === 0 || !activityStartIso) return null;
+  const targetMs = new Date(activityStartIso).getTime();
+  if (isNaN(targetMs)) return null;
+  let closest = intraday[0];
+  let minDiff = Math.abs(intraday[0][0] - targetMs);
+  for (const pair of intraday) {
+    const diff = Math.abs(pair[0] - targetMs);
+    if (diff < minDiff) { minDiff = diff; closest = pair; }
+  }
+  return closest[1];
 }
 
 function buildReadinessNote(night: WellnessDay | null, dayOf: WellnessDayOf | null): string {
@@ -130,6 +149,7 @@ function buildReadinessNote(night: WellnessDay | null, dayOf: WellnessDayOf | nu
 export function loadWellnessContext(
   analysisDir: string,
   activityDate: string,    // ISO YYYY-MM-DD
+  activityStartIso?: string | null,  // ISO datetime for intraday body battery lookup (e.g. start_date_local)
 ): WellnessContext | null {
   const wellnessPath = join(analysisDir, "garmin_wellness.json");
   if (!existsSync(wellnessPath)) return null;
@@ -187,14 +207,24 @@ export function loadWellnessContext(
     };
   })() : null;
 
-  const dayOf: WellnessDayOf | null = dayRaw ? {
-    date: activityDate,
-    body_battery_at_start: dayRaw.body_battery_start_of_day ?? dayRaw.body_battery_highest ?? null,
-    avg_stress: dayRaw.avg_daily_stress ?? null,
-    daily_steps: dayRaw.steps ?? null,
-    intensity_minutes_moderate: dayRaw.intensity_minutes_moderate ?? null,
-    intensity_minutes_vigorous: dayRaw.intensity_minutes_vigorous ?? null,
-  } : null;
+  const dayOf: WellnessDayOf | null = dayRaw ? (() => {
+    const intraday: [number, number][] | null = Array.isArray(dayRaw.body_battery_intraday)
+      ? dayRaw.body_battery_intraday : null;
+    // Use intraday lookup at activity start time; fall back to start_of_day, then highest
+    const bbAtStart = bodyBatteryAtTime(intraday, activityStartIso ?? null)
+      ?? dayRaw.body_battery_start_of_day
+      ?? dayRaw.body_battery_highest
+      ?? null;
+    return {
+      date: activityDate,
+      body_battery_at_start: bbAtStart,
+      body_battery_intraday: intraday,
+      avg_stress: dayRaw.avg_daily_stress ?? null,
+      daily_steps: dayRaw.steps ?? null,
+      intensity_minutes_moderate: dayRaw.intensity_minutes_moderate ?? null,
+      intensity_minutes_vigorous: dayRaw.intensity_minutes_vigorous ?? null,
+    };
+  })() : null;
 
   const readiness_note = buildReadinessNote(night, dayOf);
 

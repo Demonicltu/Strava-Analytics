@@ -1,12 +1,69 @@
 /**
  * Shared formatting module — build Strava description and private notes.
  * Used by both update_strava.ts and fast.ts.
- *ay
- * Description (public) = EVERYTHING (Pogačar Score + Summary + Verdict + Full Analysis)
+ *
+ * Description (public) = EVERYTHING (Amateur Score + Summary + Verdict + Full Analysis)
  * Private Notes (private, mobile-friendly) = SHORT (Tips + Key Stats)
  */
 import type { WellnessContext } from "./wellness.js";
 import type { PeriodBaseline } from "./summary_utils.js";
+
+// ─── Personal Score (cardiac-drift-aware) ───
+
+export function buildPersonalScore(crunchedRaw: any, historicalCtx: any): any {
+  if (!historicalCtx?.baselines?.length) return null;
+
+  const raw = typeof crunchedRaw === "string" ? JSON.parse(crunchedRaw) : crunchedRaw;
+  const baseline = historicalCtx.baselines.find((b: any) => b.days >= 85 && b.days <= 95)
+    ?? historicalCtx.baselines.at(-1);
+  if (!baseline || baseline.activity_count < 3) return null;
+
+  const movingSec: number = raw.summary_card?.moving_time_seconds ?? 0;
+  const isLongRide = movingSec > 9000;
+
+  const pairs: { label: string; pct: number; weight: number }[] = [];
+
+  const yourNP: number | null = raw.power?.normalized_power ?? null;
+  if (yourNP && baseline.avg_normalized_power_w)
+    pairs.push({ label: "normalized_power", pct: Math.round(yourNP / baseline.avg_normalized_power_w * 100), weight: isLongRide ? 30 : 40 });
+
+  const yourEF: number | null = raw.training_metrics?.efficiency_factor ?? null;
+  if (yourEF && baseline.avg_efficiency_factor)
+    pairs.push({ label: "efficiency_factor", pct: Math.round(yourEF / baseline.avg_efficiency_factor * 100), weight: isLongRide ? 10 : 35 });
+
+  const yourTSS: number | null = raw.training_metrics?.tss ?? null;
+  if (yourTSS && baseline.avg_tss)
+    pairs.push({ label: "tss", pct: Math.round(yourTSS / baseline.avg_tss * 100), weight: isLongRide ? 60 : 25 });
+
+  if (pairs.length === 0) return null;
+
+  const totalW = pairs.reduce((s, p) => s + p.weight, 0);
+  const composite = Math.round(pairs.reduce((s, p) => s + p.pct * (p.weight / totalW), 0));
+
+  let interpretation: string;
+  if (composite < 70)       interpretation = "Well below typical — intentional recovery or easy base day";
+  else if (composite < 90)  interpretation = "Below average effort — controlled training day";
+  else if (composite < 110) interpretation = "On par with your typical effort";
+  else if (composite < 130) interpretation = "Above your average — harder than usual";
+  else                       interpretation = "Significantly above average — one of your biggest sessions";
+
+  const metricsOut: Record<string, string> = {};
+  for (const p of pairs) {
+    const avgLabel = p.label === "normalized_power" ? `${baseline.avg_normalized_power_w} W`
+      : p.label === "efficiency_factor" ? `${baseline.avg_efficiency_factor}`
+      : `${baseline.avg_tss}`;
+    metricsOut[p.label] = `${p.pct}% of 90d avg (${avgLabel})${isLongRide && p.label === "efficiency_factor" ? " [downweighted — long ride drift]" : ""}`;
+  }
+
+  return {
+    composite_pct: composite,
+    interpretation,
+    long_ride_weighting: isLongRide,
+    metrics: metricsOut,
+    baseline_period: baseline.period_label,
+    activities_in_window: baseline.activity_count,
+  };
+}
 
 /**
  * Extract a section's content from AI analysis markdown by header keyword.
@@ -134,7 +191,7 @@ function activityLabel(cat: ActivityCategory): { summary: string; emoji: string;
  * Build description (public, visible to followers).
  * Adapts labels to activity type (ride/run/walk).
  */
-export function buildDescription(crunched: any, analysisText: string | null, historicalCtx?: any, wellnessCtx?: WellnessContext | null): string {
+export function buildDescription(crunched: any, analysisText: string | null, historicalCtx?: any, wellnessCtx?: WellnessContext | null, personalScore?: any): string {
   const lines: string[] = [];
   const cat = categorize(crunched.summary_card?.type);
   const label = activityLabel(cat);
@@ -150,21 +207,65 @@ export function buildDescription(crunched: any, analysisText: string | null, his
     }
   }
 
-  // ─── Pogačar / Kipchoge Score ───
-  if (crunched.pogacar_score?.composite_pct) {
-    const ps = crunched.pogacar_score;
-    lines.push(`🏆 POGAČAR SCORE: ${ps.composite_pct}% (${ps.reference})`);
-    for (const [key, val] of Object.entries(ps.metrics)) {
-      lines.push(`  ${key}: ${val}`);
+  // ─── Runner Category Score (running) ───
+  if (crunched.runner_score?.composite_pct != null) {
+    const rs = crunched.runner_score;
+    const rsTierLabel = rs.tier_position ? `${rs.category} — ${rs.tier_position}` : rs.category;
+    lines.push(`🏅 YOUR RUNNER SCORE`);
+    lines.push(`  🎯 Category:         ${rsTierLabel}`);
+    if (rs.composite_pct != null)
+      lines.push(`  📊 Tier progress:    ${rs.composite_pct}% toward next tier${rs.near_promotion ? " 🔝" : ""}`);
+    if (crunched.kipchoge_score?.composite_pct)
+      lines.push(`  🏆 Kipchoge Factor:  ${crunched.kipchoge_score.composite_pct}%   (world's best — for fun)`);
+    lines.push(``);
+    if (rs.metrics && Object.keys(rs.metrics).length > 0) {
+      lines.push(`── ${rs.category} breakdown (pace ceiling: ${rs.metrics.pace?.split('/')[1]?.split('→')[0]?.trim() ?? ''}) ──`);
+      for (const [, val] of Object.entries(rs.metrics)) lines.push(`  ${val}`);
+      lines.push(``);
     }
+    if (rs.near_promotion && rs.next_category)
+      lines.push(`  ↗️ Approaching ${rs.next_category} — one strong block away 🚀`);
     lines.push(``);
   }
-  if (crunched.kipchoge_score?.composite_pct) {
+
+  // ─── Amateur / Category Score (cycling) ───
+  if (crunched.amateur_score?.composite_pct != null) {
+    const as = crunched.amateur_score;
+    const tierLabel = as.tier_position ? `${as.category} — ${as.tier_position}` : as.category;
+    lines.push(`🏅 YOUR CYCLING SCORE`);
+    lines.push(`  🎯 Category:         ${tierLabel}`);
+    if (as.composite_pct != null)
+      lines.push(`  📊 Tier progress:    ${as.composite_pct}% toward next tier${as.near_promotion ? " 🔝" : ""}`);
+    if (personalScore?.composite_pct != null) {
+      const arrow = personalScore.composite_pct >= 110 ? "⬆️" : personalScore.composite_pct >= 90 ? "➡️" : "⬇️";
+      lines.push(`  👤 vs. Your Typical: ${personalScore.composite_pct}%  (vs. your 90d avg — ${arrow})`);
+    }
+    if (crunched.pogacar_score?.composite_pct != null)
+      lines.push(`  🏆 Pogačar Factor:   ${crunched.pogacar_score.composite_pct}%   (world's best — for fun)`);
+    lines.push(``);
+    if (as.metrics && Object.keys(as.metrics).length > 0) {
+      lines.push(`── ${as.category} breakdown ──`);
+      for (const [, val] of Object.entries(as.metrics)) lines.push(`  ${val}`);
+      lines.push(``);
+    }
+    if (as.near_promotion && as.next_category)
+      lines.push(`  ↗️ Approaching ${as.next_category} — one strong block away 🚀`);
+    if (personalScore?.long_ride_weighting)
+      lines.push(`  ℹ️ Personal score uses TSS-dominant weighting (>2.5h ride) — EF downweighted for cardiac drift.`);
+    lines.push(``);
+  } else if (crunched.pogacar_score?.composite_pct) {
+    // ─── Fallback: Pogačar Score (no amateur_score yet) ───
+    const ps = crunched.pogacar_score;
+    lines.push(`🏆 POGAČAR SCORE: ${ps.composite_pct}% (${ps.reference})`);
+    for (const [key, val] of Object.entries(ps.metrics)) lines.push(`  ${key}: ${val}`);
+    lines.push(``);
+  }
+
+  // ─── Kipchoge Score fallback (running without runner_score) ───
+  if (!crunched.runner_score && crunched.kipchoge_score?.composite_pct) {
     const ks = crunched.kipchoge_score;
     lines.push(`🏆 KIPCHOGE SCORE: ${ks.composite_pct}%`);
-    for (const [key, val] of Object.entries(ks.metrics)) {
-      lines.push(`  ${key}: ${val}`);
-    }
+    for (const [key, val] of Object.entries(ks.metrics)) lines.push(`  ${key}: ${val}`);
     lines.push(``);
   }
 
@@ -352,7 +453,7 @@ export function buildDescription(crunched: any, analysisText: string | null, his
         const cd = crunched.heart_rate.cardiac_drift;
         lines.push(`  Cardiac drift: ${cd.drift_bpm > 0 ? "+" : ""}${cd.drift_bpm} bpm (${cd.drift_pct}%)`);
       }
-    }
+    }3
 
     // Power best efforts
     const pwrEfforts = crunched.power?.best_efforts;

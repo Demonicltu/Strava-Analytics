@@ -4,24 +4,103 @@ Quick reference for all computed metrics, their ranges, and what they mean.
 
 ---
 
-## 🏆 Pogačar Score (Cycling)
+## 🏅 Amateur / Category Score (Cycling)
 
-How your ride compares to Tadej Pogačar. Composite % from multiple metrics.
+How your ride compares to the ceiling of your own fitness tier. HEADLINE score — motivating and self-referential.
 
 | Range | Meaning |
 |-------|---------|
-| 80-100% | Elite-level performance |
-| 60-80% | Very strong amateur |
-| 40-60% | Solid recreational — impressive vs the best ever |
-| 20-40% | Casual riding |
+| 90–100%+ | At or above your tier ceiling — consider moving up |
+| 75–90% | Performing well within your tier |
+| 60–75% | Solid effort for your level |
+| 40–60% | Light / recovery day |
+| <40% | Easy spin |
+
+**Tier detection:** FTP W/kg → speed fallback if no FTP. 7 tiers from Beginner to Pro.
+
+| Tier | FTP W/kg | Speed ceiling | EF ceiling | VAM ceiling |
+|------|----------|--------------|-----------|------------|
+| Beginner | <2.0 | 22 km/h | 1.10 | 500 |
+| Cat 5 / Recreational | 2.0–2.5 | 26 km/h | 1.35 | 700 |
+| Cat 4 / Trained | 2.5–3.2 | 30 km/h | 1.55 | 1000 |
+| Cat 3 / Strong | 3.2–4.0 | 35 km/h | 1.75 | 1400 |
+| Cat 2 / Elite Amateur | 4.0–5.0 | 40 km/h | 2.10 | 1700 |
+| Cat 1 / Semi-Pro | 5.0–6.0 | 44 km/h | 2.30 | 1900 |
+| Pro | 6.0+ | 50+ km/h | 3.00 | 2400 |
+
+**Composite weights:** Power (50% primary) + EF (25% secondary) + VAM (25% secondary, only if elev > 200m). Cadence excluded.
+`near_promotion: true` fires at ≥88% composite if a higher tier exists.
+`tier_position`: "Lower tier" / "Mid tier" / "Mid–Upper tier" / "Top of tier 🔝" — where you sit within your tier. 100% = at the next tier's door.
+
+---
+
+## 🏅 Runner Category Score (Running)
+
+How your run compares to the ceiling of your pace tier. Same structure as cycling Category Score.
+
+**Tier detection:** avg pace → 7 tiers.
+
+| Tier | Pace ceiling | Economy ceiling (s/km/bpm) | Cadence ceiling (spm) |
+|------|-------------|--------------------------|----------------------|
+| Elite / Pro | <3:20/km | 0.95 | 185 |
+| Sub-Elite | <4:00/km | 1.10 | 180 |
+| Competitive | <5:00/km | 1.40 | 178 |
+| Strong Amateur | <6:00/km | 1.80 | 175 |
+| Trained Amateur | <7:30/km | 2.50 | 170 |
+| Recreational | <10:00/km | 3.50 | 165 |
+| Beginner | 10:00+/km | 4.50 | 160 |
+
+**Composite weights:** Pace (50%) + Economy s/km/bpm (25%) + Cadence spm (25%). Economy = `pace_sec / avgHR` — lower is better.
+`near_promotion: true` fires at ≥88%. `tier_position`: same labels as cycling.
+
+---
+
+## 👤 Personal Score (Cycling)
+
+How hard this ride was vs *your own* 90-day average. Cardiac-drift-aware.
+
+| Range | Meaning |
+|-------|---------|
+| >130% | Peak effort — one of your biggest sessions |
+| 110–130% | Above average — harder than usual |
+| 90–110% | Typical training day |
+| 70–90% | Controlled / below average |
+| <70% | Recovery / easy base day |
+
+**Duration-adaptive weighting:**
+
+| Ride duration | NP weight | EF weight | TSS weight |
+|--------------|-----------|-----------|-----------|
+| < 2.5 hours | 40% | 35% | 25% |
+| ≥ 2.5 hours (long ride) | 30% | 10% | 60% |
+
+On long rides (>2.5h), cardiac drift naturally raises HR while power holds steady, reducing EF. TSS is upweighted to correctly classify a 4h Z2 grind as a "big load" day.
+
+---
+
+## 🏆 Pogačar Factor (Cycling — fun-fact footnote)
+
+How your ride compares to Tadej Pogačar. Demoted to fun framing — use Category Score as headline.
+
+| Range | Meaning |
+|-------|---------|
+| 80–100% | Elite-level performance |
+| 60–80% | Very strong amateur |
+| 40–60% | Solid recreational — impressive vs the best ever |
+| 20–40% | Casual riding |
 | <20% | Easy / recovery |
 
-**Reference used depends on ride type:**
-- Solo Training: 34 km/h baseline
-- Race (Flat): 41.5 km/h
-- Hilly Ride: 30 km/h
-- Mountain Stage: 24 km/h
-- Virtual (power only): watts only
+**IF-based speed reference (replaces fixed solo pace):**
+- Virtual Ride: power only
+- Elev > 1500m: 24 km/h (Mountain Stage)
+- Elev > 500m: 30 km/h (Hilly Ride)
+- IF ≥ 0.9 or HR > 155: 41.5 km/h (Race)
+- IF ≥ 0.8: 34 km/h (Tempo)
+- IF ≥ 0.65: 28 km/h (Endurance)
+- IF < 0.65: 24 km/h (Easy / Recovery)
+- No FTP: 34 km/h (Solo Training)
+
+**Cadence excluded** from composite (technique metric, not fitness indicator).
 
 ---
 

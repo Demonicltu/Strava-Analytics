@@ -136,7 +136,7 @@ npm run crunch
 - Lists available activity JSON files
 - You pick one
 - Processes ALL stream data points (zero sampling)
-- Computes all metrics: Pogačar/Kipchoge score, pacing, cardiac drift, power curve, climbing, cadence zones, speed zones, segment highlights
+- Computes all metrics: Category Score (amateur_score), Pogačar/Kipchoge score, pacing, cardiac drift, power curve, climbing, cadence zones, speed zones, segment highlights
 - Advanced: IF, TSS, EF, aerobic decoupling, relative effort (TRIMP), W/kg, power skills, torque, HR/power/speed/cadence zone distributions, gradient analysis, VAM per-climb
 - **Meteorology & wind:** headwind/tailwind/crosswind % per segment, net wind effect (km/h), weather conditions at start — uses weather data embedded during Step 1
 - Workout: WIS, interval detection, HR recovery rate, consistency score, HR progression, EPOC estimate
@@ -157,7 +157,7 @@ npm run analyze
 **What it does:**
 - Lists available crunched files
 - You pick one
-- Automatically loads **historical context** (7d/30d/90d/365d baselines for the same sport) from existing crunched files — no extra API calls
+- Automatically loads **historical context** (1w/1mo/3mo/6mo baselines for the same sport) from existing crunched files — no extra API calls
 - Automatically loads **Garmin wellness** for that day (HRV, sleep, Body Battery, training status, acute load, stress) if `garmin_wellness.json` exists
 - Sends enriched payload to AI (Gemini → Groq → OpenRouter → OpenAI, auto-fallback)
 - AI writes: activity score, summary, performance verdict, detailed analysis, **historical comparison**, **readiness context**, actionable tips
@@ -178,7 +178,7 @@ npm run update
 **What it does:**
 - Lists available crunched files
 - You pick one
-- Builds **description** (public): Pogačar Score + Ride Summary + Advanced Metrics (IF/TSS/W/kg) + Full AI Analysis
+- Builds **description** (public): Category Score (🎯/👤/🏆 three-tier) + Ride Summary + Advanced Metrics (IF/TSS/W/kg) + Full AI Analysis
 - Builds **private notes** (mobile-friendly): Short actionable tips + key stats
 - Previews both in terminal
 - You choose: both / description only / notes only / cancel
@@ -256,7 +256,9 @@ strava-extractor/
 
 | Metric | Requires | Description |
 |--------|----------|-------------|
-| **Pogačar Score** | — (cycling) | Composite % vs Tadej Pogačar |
+| **Pogačar Score** | — (cycling) | Composite % vs Tadej Pogačar — fun-fact footnote |
+| **Amateur / Category Score** | — (cycling) | Composite % vs your fitness tier ceiling (headline score) |
+| **Personal Score** | 3mo baselines | How hard this ride was vs your own 90d average (cardiac-drift-aware) |
 | **Kipchoge Score** | — (running) | Composite % vs Kipchoge (pace + economy + cadence) |
 | **Normalized Power (NP)** | Power meter | Weighted avg power (30s rolling) |
 | **Intensity Factor (IF)** | FTP (`RIDER_FTP_W` / `RUNNER_RFTP_W`) | NP / FTP |
@@ -542,7 +544,7 @@ npm run dashboard     # regenerate HTML dashboard
 - **Description vs Notes:** Description (public) contains the full analysis. Private notes (only you) contain short actionable tips — optimized for mobile viewing.
 - **Rider config:** Set `RIDER_WEIGHT_KG`, `RIDER_FTP_W`, `RIDER_MAX_HR`, `RIDER_LTHR` in `.env` for advanced metrics. For running, optionally set `RUNNER_RFTP_W`, `RUNNER_MAX_HR`, `RUNNER_LTHR`. Without FTP, IF/TSS/power zones won't be computed.
 - **Garmin MFA:** First login sends a one-time code to your email. Enter it in the terminal. After that the session is cached and no more MFA prompts until the session expires (typically weeks).
-- **Historical context:** Automatically included when `analysis/` contains ≥3 crunched files for the same sport. Shows 7d/30d/90d/365d baselines and how this activity compares.
+- **Historical context:** Automatically included when `analysis/` contains ≥3 crunched files for the same sport. Shows 1w/1mo/3mo/6mo baselines and how this activity compares.
 - **Sport grouping:** `compare` and historical context group `Ride + GravelRide + MountainBikeRide` together, `Run + TrailRun` together, etc. — comparisons stay sport-appropriate.
 - **Personal records:** Run `npm run records` after `npm run bulk` for complete history. Records are auto-compared against previous run — new PRs flagged with 🔥. All-time records also auto-injected into single-activity AI analysis.
 - **Overtraining warning:** `npm run digest` computes acute:chronic load ratio from your TRIMP/TSS data. Load ratio >1.3 = danger zone. If Garmin data is present, HRV trend is also checked for convergent signal.
