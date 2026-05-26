@@ -11,8 +11,37 @@ if (!existsSync(releaseDir)) mkdirSync(releaseDir);
 const releaseDist = join(releaseDir, "dist");
 if (!existsSync(releaseDist)) mkdirSync(releaseDist);
 
-const instructions = existsSync(join(rootDir, "AI_ANALYSIS_INSTRUCTIONS.md"))
-  ? readFileSync(join(rootDir, "AI_ANALYSIS_INSTRUCTIONS.md"), "utf-8") : "";
+/** Load all instruction files from instructions/ folder into a keyed object */
+function loadEmbeddedInstructions(): Record<string, string> {
+  const instrDir = join(rootDir, "instructions");
+  const result: Record<string, string> = {};
+  if (!existsSync(instrDir)) {
+    // Fallback: embed legacy monolithic file if present
+    const legacy = join(rootDir, "AI_ANALYSIS_INSTRUCTIONS.md");
+    if (existsSync(legacy)) result["__legacy__"] = readFileSync(legacy, "utf-8");
+    return result;
+  }
+  // Load top-level .md files (common, cycling, running, walk, surf, workout)
+  for (const f of readdirSync(instrDir)) {
+    if (f.endsWith(".md")) {
+      const key = f.replace(".md", "").toLowerCase();
+      result[key] = readFileSync(join(instrDir, f), "utf-8");
+    }
+  }
+  // Load devices/ subfolder
+  const devDir = join(instrDir, "devices");
+  if (existsSync(devDir)) {
+    for (const f of readdirSync(devDir)) {
+      if (f.endsWith(".md")) {
+        const key = f.replace(".md", "").toLowerCase();
+        result[key] = readFileSync(join(devDir, f), "utf-8");
+      }
+    }
+  }
+  return result;
+}
+
+const embeddedInstructions = loadEmbeddedInstructions();
 
 const ENTRIES: { name: string; src: string }[] = [
   { name: "strava",    src: "src/fast.ts"        },
@@ -38,7 +67,7 @@ async function buildEntry(name: string, src: string): Promise<number> {
     external: [],
     define: {
       "import.meta.url": "__importMetaUrl",
-      "process.env.EMBEDDED_AI_INSTRUCTIONS": JSON.stringify(instructions),
+      "process.env.EMBEDDED_AI_INSTRUCTIONS": JSON.stringify(embeddedInstructions),
     },
     banner: { js: "const __importMetaUrl = require('url').pathToFileURL(__filename).href;" },
   });
@@ -74,9 +103,29 @@ async function main() {
   copyIfExists(".env.example",                  ".env.example");
   copyIfExists("METRICS.md",                    "METRICS.md");
   copyIfExists("COMMANDS.md",                   "COMMANDS.md");
-  copyIfExists("AI_ANALYSIS_INSTRUCTIONS.md",   "AI_ANALYSIS_INSTRUCTIONS.md");
+  copyIfExists("AI_ANALYSIS_INSTRUCTIONS.md",   "AI_ANALYSIS_INSTRUCTIONS.md"); // legacy reference copy
   copyIfExists("AI_COMPARE_INSTRUCTIONS.md",    "AI_COMPARE_INSTRUCTIONS.md");
   copyIfExists("AI_DIGEST_INSTRUCTIONS.md",     "AI_DIGEST_INSTRUCTIONS.md");
+
+  // Copy instructions/ folder (split per-type files)
+  const srcInstr = join(rootDir, "instructions");
+  const releaseInstr = join(releaseDir, "instructions");
+  if (existsSync(srcInstr)) {
+    if (!existsSync(releaseInstr)) mkdirSync(releaseInstr);
+    for (const f of readdirSync(srcInstr)) {
+      if (f.endsWith(".md")) copyFileSync(join(srcInstr, f), join(releaseInstr, f));
+    }
+    const devSrc = join(srcInstr, "devices");
+    const devDest = join(releaseInstr, "devices");
+    if (existsSync(devSrc)) {
+      if (!existsSync(devDest)) mkdirSync(devDest);
+      for (const f of readdirSync(devSrc)) {
+        if (f.endsWith(".md")) copyFileSync(join(devSrc, f), join(devDest, f));
+      }
+    }
+    const instrFiles = Object.keys(embeddedInstructions);
+    console.log(`  📋 Copied instructions/ (${instrFiles.length} files: ${instrFiles.join(", ")})`);
+  }
 
   // Write .bat launchers
   const bats: { file: string; desc: string }[] = [

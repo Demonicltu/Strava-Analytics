@@ -23,16 +23,16 @@
         <div class='clearfix'>
             
             <div class='fl pad1y space-right2'>
-                <span class="strong">95.52% </span>
+                <span class="strong">94.28% </span>
                 <span class="quiet">Statements</span>
-                <span class='fraction'>64/67</span>
+                <span class='fraction'>66/70</span>
             </div>
         
             
             <div class='fl pad1y space-right2'>
-                <span class="strong">61.78% </span>
+                <span class="strong">61.24% </span>
                 <span class="quiet">Branches</span>
-                <span class='fraction'>76/123</span>
+                <span class='fraction'>79/129</span>
             </div>
         
             
@@ -46,7 +46,7 @@
             <div class='fl pad1y space-right2'>
                 <span class="strong">100% </span>
                 <span class="quiet">Lines</span>
-                <span class='fraction'>59/59</span>
+                <span class='fraction'>61/61</span>
             </div>
         
             
@@ -296,7 +296,18 @@
 <a name='L231'></a><a href='#L231'>231</a>
 <a name='L232'></a><a href='#L232'>232</a>
 <a name='L233'></a><a href='#L233'>233</a>
-<a name='L234'></a><a href='#L234'>234</a></td><td class="line-coverage quiet"><span class="cline-any cline-neutral">&nbsp;</span>
+<a name='L234'></a><a href='#L234'>234</a>
+<a name='L235'></a><a href='#L235'>235</a>
+<a name='L236'></a><a href='#L236'>236</a>
+<a name='L237'></a><a href='#L237'>237</a>
+<a name='L238'></a><a href='#L238'>238</a>
+<a name='L239'></a><a href='#L239'>239</a>
+<a name='L240'></a><a href='#L240'>240</a>
+<a name='L241'></a><a href='#L241'>241</a>
+<a name='L242'></a><a href='#L242'>242</a>
+<a name='L243'></a><a href='#L243'>243</a>
+<a name='L244'></a><a href='#L244'>244</a>
+<a name='L245'></a><a href='#L245'>245</a></td><td class="line-coverage quiet"><span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
@@ -379,15 +390,25 @@
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-yes">7x</span>
 <span class="cline-any cline-yes">1x</span>
 <span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-yes">1x</span>
-<span class="cline-any cline-yes">1x</span>
-<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-yes">7x</span>
+<span class="cline-any cline-yes">7x</span>
+<span class="cline-any cline-yes">7x</span>
 <span class="cline-any cline-yes">3x</span>
 <span class="cline-any cline-yes">3x</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-yes">1x</span>
 <span class="cline-any cline-yes">1x</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
@@ -437,6 +458,7 @@
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-yes">7x</span>
 <span class="cline-any cline-yes">7x</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
@@ -609,18 +631,28 @@ function pct(part: number | null | undefined, total: number | null | undefined):
 &nbsp;
 /**
  * Find the body battery value at the closest timestamp to activityStartIso.
- * intraday: [[timestamp_ms, value], ...]
+ * intraday: [[timestamp_ms, value], ...] — Garmin timestamps are TRUE UTC epoch ms.
+ * activityStartIso: Strava's "start_date_local" — local time with Z suffix (misleading).
+ * utcOffsetHours: local UTC offset (e.g. 3 for EEST). Strava's start_date_local has a Z
+ *   suffix but represents local time, not UTC. Subtract offset to get true UTC.
  */
-function bodyBatteryAtTime(intraday: [number, number][] | null, activityStartIso: string | null): number | null {
+function bodyBatteryAtTime(intraday: [number, number][] | null, activityStartIso: string | null, utcOffsetHours: number): number | null {
   if (!intraday || intraday.length === 0 || !activityStartIso) return null;
-  const targetMs = new Date(activityStartIso).getTime();
-  <span class="missing-if-branch" title="if path not taken" >I</span>if (isNaN(targetMs)) <span class="cstat-no" title="statement not covered" >return null;</span>
+  const parsedMs = new Date(activityStartIso).getTime();
+  <span class="missing-if-branch" title="if path not taken" >I</span>if (isNaN(parsedMs)) <span class="cstat-no" title="statement not covered" >return null;</span>
+  // Strava's start_date_local has Z suffix but is local time. JS parses Z as UTC.
+  // Subtract the offset to convert to true UTC, matching Garmin's UTC epoch timestamps.
+  const targetMs = activityStartIso.endsWith("Z") || <span class="branch-1 cbranch-no" title="branch not covered" >activityStartIso.endsWith("z")</span>
+    ? parsedMs - utcOffsetHours * 3_600_000
+    : <span class="branch-1 cbranch-no" title="branch not covered" >parsedMs;</span>
   let closest = intraday[0];
   let minDiff = Math.abs(intraday[0][0] - targetMs);
   for (const pair of intraday) {
     const diff = Math.abs(pair[0] - targetMs);
     if (diff &lt; minDiff) { minDiff = diff; closest = pair; }
   }
+  // Safety: if closest point is more than 2 hours away, data is too sparse — return null
+  <span class="missing-if-branch" title="if path not taken" >I</span>if (minDiff &gt; 2 * 3_600_000) <span class="cstat-no" title="statement not covered" >return null;</span>
   return closest[1];
 }
 &nbsp;
@@ -681,6 +713,7 @@ export function loadWellnessContext(
   analysisDir: string,
   activityDate: string,    // ISO YYYY-MM-DD
   activityStartIso?: string | null,  // ISO datetime for intraday body battery lookup (e.g. start_date_local)
+  utcOffsetHours?: number,           // Local UTC offset in hours (e.g. 3 for EEST) — fixes Strava Z-suffix timezone mismatch
 ): WellnessContext | null {
   const wellnessPath = join(analysisDir, "garmin_wellness.json");
   if (!existsSync(wellnessPath)) return null;
@@ -742,7 +775,7 @@ export function loadWellnessContext(
     const intraday: [number, number][] | null = Array.isArray(dayRaw.body_battery_intraday)
       ? dayRaw.body_battery_intraday : <span class="branch-1 cbranch-no" title="branch not covered" >null;</span>
     // Use intraday lookup at activity start time; fall back to start_of_day, then highest
-    const bbAtStart = bodyBatteryAtTime(intraday, activityStartIso ?? null)
+    const bbAtStart = bodyBatteryAtTime(intraday, activityStartIso ?? null, utcOffsetHours ?? 0)
       ?? dayRaw.body_battery_start_of_day
       ?? <span class="branch-2 cbranch-no" title="branch not covered" >dayRaw.body_battery_highest</span>
       ?? <span class="branch-3 cbranch-no" title="branch not covered" >null;</span>
@@ -769,7 +802,7 @@ export function loadWellnessContext(
             <div class='footer quiet pad2 space-top1 center small'>
                 Code coverage generated by
                 <a href="https://istanbul.js.org/" target="_blank" rel="noopener noreferrer">istanbul</a>
-                at 2026-05-24T21:35:01.331Z
+                at 2026-05-26T21:50:25.264Z
             </div>
         <script src="prettify.js"></script>
         <script>

@@ -78,18 +78,28 @@ function pct(part: number | null | undefined, total: number | null | undefined):
 
 /**
  * Find the body battery value at the closest timestamp to activityStartIso.
- * intraday: [[timestamp_ms, value], ...]
+ * intraday: [[timestamp_ms, value], ...] — Garmin timestamps are TRUE UTC epoch ms.
+ * activityStartIso: Strava's "start_date_local" — local time with Z suffix (misleading).
+ * utcOffsetHours: local UTC offset (e.g. 3 for EEST). Strava's start_date_local has a Z
+ *   suffix but represents local time, not UTC. Subtract offset to get true UTC.
  */
-function bodyBatteryAtTime(intraday: [number, number][] | null, activityStartIso: string | null): number | null {
+function bodyBatteryAtTime(intraday: [number, number][] | null, activityStartIso: string | null, utcOffsetHours: number): number | null {
   if (!intraday || intraday.length === 0 || !activityStartIso) return null;
-  const targetMs = new Date(activityStartIso).getTime();
-  if (isNaN(targetMs)) return null;
+  const parsedMs = new Date(activityStartIso).getTime();
+  if (isNaN(parsedMs)) return null;
+  // Strava's start_date_local has Z suffix but is local time. JS parses Z as UTC.
+  // Subtract the offset to convert to true UTC, matching Garmin's UTC epoch timestamps.
+  const targetMs = activityStartIso.endsWith("Z") || activityStartIso.endsWith("z")
+    ? parsedMs - utcOffsetHours * 3_600_000
+    : parsedMs;
   let closest = intraday[0];
   let minDiff = Math.abs(intraday[0][0] - targetMs);
   for (const pair of intraday) {
     const diff = Math.abs(pair[0] - targetMs);
     if (diff < minDiff) { minDiff = diff; closest = pair; }
   }
+  // Safety: if closest point is more than 2 hours away, data is too sparse — return null
+  if (minDiff > 2 * 3_600_000) return null;
   return closest[1];
 }
 
@@ -150,6 +160,7 @@ export function loadWellnessContext(
   analysisDir: string,
   activityDate: string,    // ISO YYYY-MM-DD
   activityStartIso?: string | null,  // ISO datetime for intraday body battery lookup (e.g. start_date_local)
+  utcOffsetHours?: number,           // Local UTC offset in hours (e.g. 3 for EEST) — fixes Strava Z-suffix timezone mismatch
 ): WellnessContext | null {
   const wellnessPath = join(analysisDir, "garmin_wellness.json");
   if (!existsSync(wellnessPath)) return null;
@@ -211,7 +222,7 @@ export function loadWellnessContext(
     const intraday: [number, number][] | null = Array.isArray(dayRaw.body_battery_intraday)
       ? dayRaw.body_battery_intraday : null;
     // Use intraday lookup at activity start time; fall back to start_of_day, then highest
-    const bbAtStart = bodyBatteryAtTime(intraday, activityStartIso ?? null)
+    const bbAtStart = bodyBatteryAtTime(intraday, activityStartIso ?? null, utcOffsetHours ?? 0)
       ?? dayRaw.body_battery_start_of_day
       ?? dayRaw.body_battery_highest
       ?? null;

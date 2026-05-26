@@ -185,13 +185,35 @@ export async function fetchWeatherMultiPoint(
  * Build waypoint inputs from stream_data rows + activity start UTC time.
  * Samples ONE waypoint per unique UTC hour the activity spans — no redundant calls.
  * e.g. 45-min ride → 1 call, 2.5h ride → 3 calls, 5h ride → 6 calls.
+ *
+ * @param fallbackLatLng - Optional [lat, lng] used when stream has no GPS data
+ *                         (e.g. indoor/virtual activities with start_latlng from the summary).
+ * @param durationSec    - Activity duration in seconds; used only when fallback applies.
  */
 export function buildWeatherWaypoints(
   streamRows: { latitude?: number; longitude?: number; time_seconds?: number }[],
-  activityStartUtc: string
+  activityStartUtc: string,
+  fallbackLatLng?: [number, number] | null,
+  durationSec?: number,
 ): { lat: number; lng: number; utcIso: string; waypointPct: number }[] {
   const gpsRows = streamRows.filter(r => r.latitude != null && r.longitude != null);
-  if (gpsRows.length === 0) return [];
+  if (gpsRows.length === 0) {
+    // Fallback: single-point fetch using activity start coordinates
+    if (!fallbackLatLng) return [];
+    const [lat, lng] = fallbackLatLng;
+    const startMs = new Date(activityStartUtc).getTime();
+    const endMs = startMs + (durationSec ?? 3600) * 1000;
+    const startHourIdx = Math.floor(startMs / 3_600_000);
+    const endHourIdx = Math.floor(endMs / 3_600_000);
+    const waypoints: { lat: number; lng: number; utcIso: string; waypointPct: number }[] = [];
+    const totalDurSec = (durationSec ?? 3600) || 1;
+    for (let h = startHourIdx; h <= endHourIdx; h++) {
+      const offsetSec = Math.max(0, (h * 3_600_000 - startMs) / 1000);
+      const pct = Math.round(offsetSec / totalDurSec * 100);
+      waypoints.push({ lat, lng, utcIso: new Date(h * 3_600_000).toISOString(), waypointPct: pct });
+    }
+    return waypoints;
+  }
 
   const startMs = new Date(activityStartUtc).getTime();
   const startHour = Math.floor(startMs / 3_600_000); // UTC hour index

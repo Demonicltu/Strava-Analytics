@@ -238,20 +238,56 @@ def fetch_day(api: Garmin, date_str: str) -> dict:
 
     # ── VO2max — not returned by this API, skipped ──
 
-    # ── Body Battery intraday (start/end of day + full array for activity-time lookup) ──
-    battery = safe_get(api.get_body_battery, date_str, date_str, label="body battery intraday")
-    if battery and isinstance(battery, list) and len(battery) > 0:
-        day_data = battery[0] if isinstance(battery[0], dict) else {}
-        try:
-            pairs = [[v[0], v[1]] for v in day_data.get("bodyBatteryValuesArray", [])
-                     if isinstance(v, list) and len(v) > 1 and v[1] is not None]
-            if pairs:
-                record["body_battery_start_of_day"] = pairs[0][1]
-                record["body_battery_end_of_day"] = pairs[-1][1]
-                # Store full intraday array [timestamp_ms, value] for activity-time lookup
-                record["body_battery_intraday"] = pairs
-        except Exception:
-            pass
+    # ── Body Battery intraday via daily stress endpoint (high resolution, 3-min intervals) ──
+    # get_stress_data returns bodyBatteryValuesArray: [timestamp_ms, status_str, bb_level, float]
+    # Index 0 = timestamp, index 2 = body battery value (0-100). Downsample to 15-min for storage.
+    # Fallback to get_body_battery if stress endpoint doesn't return BB data.
+    bb_pairs = []
+    stress_data = safe_get(api.get_stress_data, date_str, label="daily stress / body battery")
+    if stress_data and isinstance(stress_data, dict):
+        raw_bb = stress_data.get("bodyBatteryValuesArray") or []
+        # Format: [timestamp_ms, "MEASURED"|str, bb_level, float] — extract index 0 and 2
+        def _to_int(x):
+            try: return int(x)
+            except (TypeError, ValueError): return None
+        all_valid = []
+        for v in raw_bb:
+            if not (isinstance(v, list) and len(v) >= 3):
+                continue
+            ts = _to_int(v[0])
+            bb = _to_int(v[2])  # index 2 = body battery level
+            if ts is not None and bb is not None and 0 <= bb <= 100:
+                all_valid.append([ts, bb])
+        if all_valid:
+            # Downsample: keep one point per 15-minute window (900,000 ms)
+            last_kept_ts = 0
+            for pair in all_valid:
+                if pair[0] - last_kept_ts >= 900_000:
+                    bb_pairs.append(pair)
+                    last_kept_ts = pair[0]
+            # Always include the last point of the day
+            if all_valid[-1] != bb_pairs[-1]:
+                bb_pairs.append(all_valid[-1])
+
+    if not bb_pairs:
+        # Fallback to old summary endpoint (returns only 4-8 inflection points)
+        battery = safe_get(api.get_body_battery, date_str, date_str, label="body battery fallback")
+        if battery and isinstance(battery, list) and len(battery) > 0:
+            day_data = battery[0] if isinstance(battery[0], dict) else {}
+            try:
+                def _safe_int(x):
+                    try: return int(x)
+                    except (TypeError, ValueError): return None
+                raw_pairs = [[_safe_int(v[0]), _safe_int(v[1])] for v in day_data.get("bodyBatteryValuesArray", [])
+                             if isinstance(v, list) and len(v) > 1]
+                bb_pairs = [[ts, bb] for ts, bb in raw_pairs if ts is not None and bb is not None]
+            except Exception:
+                pass
+
+    if bb_pairs:
+        record["body_battery_start_of_day"] = bb_pairs[0][1]
+        record["body_battery_end_of_day"] = bb_pairs[-1][1]
+        record["body_battery_intraday"] = bb_pairs
 
     return record
 

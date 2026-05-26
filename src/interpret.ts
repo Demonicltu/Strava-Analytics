@@ -1,0 +1,409 @@
+/**
+ * Builds focused AI interpretation requests for each analysis slot.
+ * Each slot gets a small, targeted context object and a short system prompt.
+ * Few-shot examples are appended from instructions/examples/{slot}.md when available.
+ */
+import type { AiRequest } from "./ai_client.js";
+import { loadFewShot } from "./few_shot.js";
+
+// ─── Shared context ───────────────────────────────────────────────────────────
+
+interface ActivityDigest {
+  sport: string;
+  distance: string;
+  duration: string;
+  avgPace?: string;
+  avgSpeed?: string;
+  avgHR: number;
+  maxHR: number;
+  avgPower?: number;
+  np?: number;
+  tss?: number;
+  ifactor?: number;
+  ftp?: number;
+  weight?: number;
+  decoupling?: number;
+  drift?: number;
+}
+
+function buildDigest(c: any): ActivityDigest {
+  const sc = c.summary_card;
+  const type = sc?.type ?? "Activity";
+  const isRun = type.toLowerCase().includes("run");
+  const avgSpeedKmh = c.pacing?.first_half?.avg_speed_kmh; // rough proxy
+  let avgPace: string | undefined;
+  if (isRun && avgSpeedKmh) {
+    const s = 3600 / avgSpeedKmh;
+    avgPace = `${Math.floor(s / 60)}:${String(Math.round(s % 60)).padStart(2, "0")}/km`;
+  }
+  return {
+    sport: type,
+    distance: sc?.distance ?? "—",
+    duration: sc?.moving_time ?? "—",
+    avgPace,
+    avgSpeed: sc?.avg_speed,
+    avgHR: Math.round(c.heart_rate?.stats?.avg ?? 0),
+    maxHR: Math.round(c.heart_rate?.stats?.max ?? 0),
+    avgPower: c.power?.avg_power ?? undefined,
+    np: c.power?.normalized_power ?? undefined,
+    tss: c.training_metrics?.tss ?? undefined,
+    ifactor: c.training_metrics?.intensity_factor ?? undefined,
+    ftp: c.training_metrics?.ftp_used ?? undefined,
+    weight: undefined,
+    decoupling: c.aerobic_decoupling?.decoupling_pct ?? undefined,
+    drift: c.heart_rate?.cardiac_drift?.drift_bpm ?? undefined,
+  };
+}
+
+const TONE = "Positive, specific, data-driven. No fluff, no filler phrases like 'Great job' or 'Overall'. Use exact numbers. 2-4 sentences unless specified.";
+
+// ─── Slot builders ────────────────────────────────────────────────────────────
+
+function verdictRequest(c: any, digest: ActivityDigest): AiRequest {
+  const prCount = c.segments_summary?.prs ?? 0;
+  return {
+    slot: "verdict",
+    system: `You analyze athlete activity data. Write a 2-3 sentence performance verdict. ${TONE}`,
+    user: JSON.stringify({
+      sport: digest.sport,
+      distance: digest.distance,
+      duration: digest.duration,
+      avg_pace: digest.avgPace,
+      avg_speed: digest.avgSpeed,
+      avg_hr: digest.avgHR,
+      avg_power: digest.avgPower,
+      tss: digest.tss,
+      intensity_factor: digest.ifactor,
+      aerobic_decoupling_pct: digest.decoupling,
+      cardiac_drift_bpm: digest.drift,
+      pacing_type: c.pacing?.type,
+      segment_prs: prCount,
+      weather_condition: c.meteorology?.at_activity_start?.weather_description,
+    }),
+    maxTokens: 200,
+  };
+}
+
+function pacingRequest(c: any, digest: ActivityDigest): AiRequest {
+  const pac = c.pacing;
+  return {
+    slot: "pacing_interpretation",
+    system: `You analyze athlete pacing data. State split type (positive/negative/even), by how much, and interpret quality in 2 sentences. ${TONE} Never repeat the numbers from the table — add interpretation only.`,
+    user: JSON.stringify({
+      sport: digest.sport,
+      split_type: pac?.type,
+      first_half_speed: pac?.first_half?.avg_speed_kmh,
+      second_half_speed: pac?.second_half?.avg_speed_kmh,
+      first_half_hr: pac?.first_half?.avg_hr,
+      second_half_hr: pac?.second_half?.avg_hr,
+      fastest_km: pac?.fastest_km,
+      slowest_km: pac?.slowest_km,
+    }),
+    maxTokens: 150,
+  };
+}
+
+function cardiacDriftRequest(c: any): AiRequest {
+  const cd = c.heart_rate?.cardiac_drift;
+  return {
+    slot: "cardiac_drift_interpretation",
+    system: `Write 1 sentence interpreting cardiac drift in context of the activity. Positive drift = fatigue / heat. Near-zero = efficient. Negative = terrain-driven. ${TONE}`,
+    user: JSON.stringify({
+      drift_bpm: cd?.drift_bpm,
+      drift_pct: cd?.drift_pct,
+      aerobic_decoupling_pct: c.aerobic_decoupling?.decoupling_pct,
+      duration_min: Math.round((c.summary_card?.moving_time_seconds ?? 0) / 60),
+    }),
+    maxTokens: 80,
+  };
+}
+
+function powerInterpretationRequest(c: any): AiRequest {
+  return {
+    slot: "power_interpretation",
+    system: `Interpret the Variability Index (VI) in 1-2 sentences. VI near 1.0 = steady effort; higher = variable/surges. ${TONE}`,
+    user: JSON.stringify({
+      variability_index: c.power?.variability_index,
+      avg_power: c.power?.avg_power,
+      normalized_power: c.power?.normalized_power,
+    }),
+    maxTokens: 80,
+  };
+}
+
+function efRequest(c: any): AiRequest {
+  return {
+    slot: "ef_interpretation",
+    system: `Write 1 short phrase (not a full sentence) assessing Efficiency Factor quality. E.g. "strong, reflecting good aerobic fitness for the given power output." or "below average, suggesting fatigue or harder than usual terrain." ${TONE}`,
+    user: JSON.stringify({
+      efficiency_factor: c.training_metrics?.efficiency_factor,
+      baseline_ef: null, // filled if historical available
+    }),
+    maxTokens: 40,
+  };
+}
+
+function decouplingRequest(c: any): AiRequest {
+  const ad = c.aerobic_decoupling;
+  return {
+    slot: "decoupling_interpretation",
+    system: `Write 1 sentence interpreting aerobic decoupling. <3% = excellent aerobic base. 3-5% = good. 5-10% = needs more Z2. >10% = significant aerobic drift, focus on base building. ${TONE}`,
+    user: JSON.stringify({
+      decoupling_pct: ad?.decoupling_pct,
+      first_half_power: ad?.first_half_power,
+      second_half_power: ad?.second_half_power,
+      first_half_hr: ad?.first_half_hr,
+      second_half_hr: ad?.second_half_hr,
+    }),
+    maxTokens: 60,
+  };
+}
+
+function powerSkillsRequest(c: any): AiRequest {
+  return {
+    slot: "power_skills_interpretation",
+    system: `Write 2-3 sentences interpreting the power profile (sprint/attack/sustained). Identify primary strength, what it means for ride style. ${TONE}`,
+    user: JSON.stringify({
+      power_skills: c.power_skills,
+      power_to_weight: c.power_to_weight,
+      sport: c.summary_card?.type,
+    }),
+    maxTokens: 150,
+  };
+}
+
+function hrZonesRequest(c: any): AiRequest {
+  const hz = c.training_zones?.hr_zones;
+  return {
+    slot: "hr_zones_insight",
+    system: `Write 1-2 sentences on which HR zone dominated and what it means for training quality. ${TONE}`,
+    user: JSON.stringify({
+      zones: hz?.zones?.map((z: any) => ({ zone: z.zone, pct: z.pct })),
+      sport: c.summary_card?.type,
+      intensity_factor: c.training_metrics?.intensity_factor,
+    }),
+    maxTokens: 80,
+  };
+}
+
+function powerZonesRequest(c: any): AiRequest {
+  const pz = c.training_zones?.power_zones;
+  return {
+    slot: "power_zones_insight",
+    system: `Write 1-2 sentences on which power zones dominated and training stimulus. ${TONE}`,
+    user: JSON.stringify({
+      zones: pz?.zones?.map((z: any) => ({ zone: z.zone, pct: z.pct })),
+      ftp: pz?.ftp_used,
+      tss: c.training_metrics?.tss,
+    }),
+    maxTokens: 80,
+  };
+}
+
+function cadenceZonesRequest(c: any): AiRequest {
+  const cz = c.training_zones?.cadence_zones;
+  const sport = (c.summary_card?.type ?? "").toLowerCase().includes("run") ? "running" : "cycling";
+  return {
+    slot: "cadence_zones_insight",
+    system: `Write 1 sentence on cadence pattern quality. Running: optimal = 170-180 spm. Cycling: optimal = 85-95 rpm. ${TONE}`,
+    user: JSON.stringify({
+      zones: cz?.zones?.map((z: any) => ({ zone: z.zone, pct: z.pct })),
+      avg_cadence: c.cadence?.stats?.avg,
+      sport,
+    }),
+    maxTokens: 60,
+  };
+}
+
+function vamRequest(c: any): AiRequest {
+  const vam = c.vam_analysis;
+  const sport = (c.summary_card?.type ?? "").toLowerCase().includes("run") ? "running" : "cycling";
+  const refs = sport === "running"
+    ? "hiking=200-400, trail runner=400-700, elite trail=800-1000"
+    : "recreational=600-800, good amateur=800-1200, elite=1500+, Pogačar=1800-2000";
+  return {
+    slot: "vam_interpretation",
+    system: `Write 1-2 sentences interpreting the VAM values in context of the sport. Reference: ${refs}. ${TONE}`,
+    user: JSON.stringify({
+      best_vam: vam?.best_vam_climb?.vam,
+      overall_vam: vam?.overall_vam,
+      sport,
+      total_ascent_m: c.climbing_analysis?.total_ascent_m,
+    }),
+    maxTokens: 80,
+  };
+}
+
+function torqueRequest(c: any): AiRequest {
+  const sport = (c.summary_card?.type ?? "").toLowerCase().includes("run") ? "running" : "cycling";
+  const refs = sport === "running"
+    ? "recreational=10-18Nm, trained=18-28Nm, elite=28-40Nm, world-class=40+Nm"
+    : "recreational=15-25Nm, strong amateur=25-40Nm, pro=40-60Nm";
+  return {
+    slot: "torque_interpretation",
+    system: `Write 1-2 sentences interpreting torque values. Reference: ${refs}. ${TONE}`,
+    user: JSON.stringify({ avg_nm: c.torque?.avg_torque_nm ?? c.torque?.avg_nm, peak_nm: c.torque?.peak_torque_nm ?? c.torque?.peak_nm, sport }),
+    maxTokens: 80,
+  };
+}
+
+function tipsRequest(c: any, digest: ActivityDigest, historical: any | null): AiRequest {
+  return {
+    slot: "tips",
+    system: `Write 3-5 actionable training tips as markdown bullet points starting with emoji. Each tip MUST reference a specific number from the data. Frame weaknesses as improvement opportunities. Format: "- **emoji Title** — specific advice with number." ${TONE}`,
+    user: JSON.stringify({
+      sport: digest.sport,
+      avg_hr: digest.avgHR,
+      avg_power: digest.avgPower,
+      tss: digest.tss,
+      intensity_factor: digest.ifactor,
+      aerobic_decoupling_pct: digest.decoupling,
+      cardiac_drift_bpm: digest.drift,
+      pacing_type: c.pacing?.type,
+      variability_index: c.power?.variability_index,
+      avg_cadence: c.cadence?.stats?.avg,
+      cadence_is_low: c.cadence?.is_low,
+      segment_prs: c.segments_summary?.prs ?? 0,
+      climbing_total_ascent_m: c.climbing_analysis?.total_ascent_m,
+      best_vam: c.vam_analysis?.best_vam_climb?.vam,
+      torque_avg_nm: c.torque?.avg_torque_nm ?? c.torque?.avg_nm,
+      historical_avg_decoupling: historical?.baselines?.find((b: any) => b.days >= 160)?.avg_aerobic_decoupling_pct ?? null,
+    }),
+    maxTokens: 300,
+  };
+}
+
+function historicalRequest(c: any, digest: ActivityDigest, historical: any): AiRequest {
+  const baselines = historical.baselines ?? [];
+  const primary = baselines.find((b: any) => b.days >= 85 && b.days <= 95) ?? baselines.at(-1);
+  const slow = baselines.find((b: any) => b.days >= 160) ?? baselines.at(-1);
+
+  // Parse best 20min power from string "206.4 W" to number
+  const raw20min = c.power?.best_efforts?.["20min"];
+  const best20minW = typeof raw20min === "string" ? parseFloat(raw20min) || null : raw20min ?? null;
+
+  // Cadence range (p5-p95)
+  const cadStats = c.cadence?.stats;
+  const cadenceRange = cadStats?.p5 != null && cadStats?.p95 != null
+    ? `${cadStats.p5}-${cadStats.p95} ${c.cadence?.unit ?? "rpm"}` : null;
+
+  return {
+    slot: "historical_comparison",
+    system: `Write structured bullet comparison. Format per metric: "- emoji **Label:** X unit vs. N-month avg Y unit → context label emoji". Use ONLY these emojis for context labels: ⬆️ (higher/above avg), ⬇️ (lower/below avg), 🟢 (good/optimal), 🟡 (neutral/in range), 🔴 (concern/warning). Include units (bpm, W, rpm, %, etc). Include all available metrics: HR, power, NP, cadence (show avg + range p5-p95 if provided), TSS, Load (TRIMP), VI, cardiac drift, EF, Z2%, decoupling, VO2max, best 20min power. Use 3mo baseline for HR/power/cadence/TSS/VI/drift/TRIMP/best20min. Use 6mo baseline for EF/Z2%/decoupling/VO2max. Last bullet: "- 📈 **Trend:** Improving/Stable/Declining — 1-2 sentences explaining direction based on all compared metrics and PRs". Skip metrics where both this activity and baseline are null. ${TONE}`,
+    user: JSON.stringify({
+      this_activity: {
+        avg_hr: digest.avgHR,
+        avg_power: digest.avgPower,
+        np: digest.np,
+        tss: digest.tss,
+        ef: c.training_metrics?.efficiency_factor,
+        cadence: c.cadence?.stats?.avg,
+        cadence_range_p5_p95: cadenceRange,
+        z2_pct: c.training_zones?.hr_zones?.zones?.find((z: any) => z.zone?.includes("Z2"))?.pct,
+        vi: c.power?.variability_index,
+        drift_bpm: digest.drift,
+        decoupling_pct: digest.decoupling,
+        vo2max: c.vo2max?.value,
+        trimp: c.relative_effort?.score,
+        best_20min_power_w: best20minW,
+      },
+      primary_baseline: primary ? {
+        period: primary.period_label,
+        avg_hr: primary.avg_hr ?? primary.avg_hr_bpm,
+        avg_np: primary.avg_normalized_power_w,
+        avg_tss: primary.avg_tss,
+        avg_cadence: primary.avg_cadence,
+        avg_vi: primary.avg_variability_index ?? primary.avg_vi,
+        avg_drift: primary.avg_cardiac_drift_bpm,
+        avg_trimp: primary.avg_trimp,
+        avg_best_20min_power_w: primary.avg_best_20min_power_w ?? primary.best_20min_power_w,
+        activity_count: primary.activity_count,
+      } : null,
+      slow_baseline: slow ? {
+        period: slow.period_label,
+        avg_ef: slow.avg_efficiency_factor,
+        avg_z2_pct: slow.avg_z2_pct,
+        avg_decoupling: slow.avg_aerobic_decoupling_pct,
+        avg_vo2max: slow.avg_vo2max,
+      } : null,
+    }),
+    maxTokens: 400,
+  };
+}
+
+function readinessRequest(wellness: any, digest: ActivityDigest, c: any): AiRequest {
+  const n2 = wellness.night_before;
+  const d = wellness.day_of;
+  return {
+    slot: "readiness_verdict",
+    system: `Write one bold sentence (no ** needed, caller adds it) summarising readiness going into the activity. Reference 1-2 specific metrics. ${TONE}`,
+    user: JSON.stringify({
+      sleep_score: n2?.sleep_score,
+      hrv_ms: n2?.hrv_last_5_min,
+      hrv_vs_baseline: n2?.hrv_vs_baseline,
+      resting_hr: n2?.resting_hr,
+      body_battery_at_start: d?.body_battery_at_start ?? n2?.body_battery_start,
+      training_readiness: n2?.training_readiness_score,
+      stress_high_pct: n2?.stress_high_pct,
+      activity_avg_hr: digest.avgHR,
+      activity_tss: digest.tss,
+      prs: c.segments_summary?.prs ?? 0,
+    }),
+    maxTokens: 80,
+  };
+}
+
+// ─── Main export ──────────────────────────────────────────────────────────────
+
+/**
+ * Append a few-shot example to an AiRequest's user field if one exists for the slot.
+ */
+function withFewShot(req: AiRequest): AiRequest {
+  const example = loadFewShot(req.slot);
+  if (!example) return req;
+  return {
+    ...req,
+    user: `${req.user}\n\n--- Example ---\nInput: ${example.input}\nOutput: ${example.output}`,
+  };
+}
+
+/**
+ * Build all interpretation requests for a given crunched activity.
+ * Only requests for slots that have data are included.
+ * Few-shot examples are appended when available.
+ */
+export function buildInterpretationRequests(
+  crunched: any,
+  historical: any | null,
+  wellness: any | null,
+  slotNames: string[],
+): AiRequest[] {
+  const c = crunched;
+  const digest = buildDigest(c);
+  const has = (slot: string) => slotNames.includes(slot);
+  const requests: AiRequest[] = [];
+
+  if (has("verdict"))                   requests.push(withFewShot(verdictRequest(c, digest)));
+  if (has("pacing_interpretation"))     requests.push(withFewShot(pacingRequest(c, digest)));
+  if (has("cardiac_drift_interpretation")) requests.push(withFewShot(cardiacDriftRequest(c)));
+  if (has("power_interpretation"))      requests.push(withFewShot(powerInterpretationRequest(c)));
+  if (has("ef_interpretation"))         requests.push(withFewShot(efRequest(c)));
+  if (has("decoupling_interpretation")) requests.push(withFewShot(decouplingRequest(c)));
+  if (has("power_skills_interpretation")) requests.push(withFewShot(powerSkillsRequest(c)));
+  if (has("hr_zones_insight"))          requests.push(withFewShot(hrZonesRequest(c)));
+  if (has("power_zones_insight"))       requests.push(withFewShot(powerZonesRequest(c)));
+  if (has("cadence_zones_insight"))     requests.push(withFewShot(cadenceZonesRequest(c)));
+  if (has("vam_interpretation"))        requests.push(withFewShot(vamRequest(c)));
+  if (has("torque_interpretation"))     requests.push(withFewShot(torqueRequest(c)));
+  if (has("tips"))                      requests.push(withFewShot(tipsRequest(c, digest, historical)));
+  if (has("historical_comparison") && historical) requests.push(withFewShot(historicalRequest(c, digest, historical)));
+  if (has("readiness_verdict") && wellness)       requests.push(withFewShot(readinessRequest(wellness, digest, c)));
+
+  return requests;
+}
+
+
+
+
+
+

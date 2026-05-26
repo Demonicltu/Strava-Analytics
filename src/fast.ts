@@ -20,6 +20,10 @@ import { loadAllSummaries, buildHistoricalContext, groupSport, extractSummary, c
 import { loadWellnessContext } from "./wellness.js";
 import type { SummaryActivity } from "./types.js";
 import type { AxiosInstance } from "axios";
+import { loadComposedInstructions } from "./instructions.js";
+import { loadAllConfigs as loadAiConfigs, callAIBatch } from "./ai_client.js";
+import { renderTemplate, fillSlots, getSlotNames } from "./template.js";
+import { buildInterpretationRequests } from "./interpret.js";
 
 let __dirname: string;
 try { __dirname = dirname(fileURLToPath(import.meta.url)); } catch { __dirname = process.cwd(); }
@@ -27,7 +31,7 @@ try { __dirname = dirname(fileURLToPath(import.meta.url)); } catch { __dirname =
 const BASE_DIR = existsSync(join(__dirname, "..", "package.json")) ? join(__dirname, "..") : process.cwd();
 const OUTPUT_DIR = join(BASE_DIR, "output");
 const ANALYSIS_DIR = join(BASE_DIR, "analysis");
-const INSTRUCTIONS_PATH = join(BASE_DIR, "AI_ANALYSIS_INSTRUCTIONS.md");
+const INSTRUCTIONS_DIR = join(BASE_DIR, "instructions");
 
 /**
  * Compact whitespace in markdown without breaking structure.
@@ -44,16 +48,27 @@ function compactMarkdown(text: string): string {
     if (inFence) { out.push(line); continue; }
     out.push(line.replace(/  +/g, " ").replace(/[ \t]+$/, ""));
   }
-  return out.join("\n").replace(/\n{3,}/g, "\n\n");
+  return out.join("\n").replace(/\n{4,}/g, "\n\n\n").replace(/\n{3,}/g, "\n\n");
 }
 
-function getInstructions(): string {
-  // Bundled mode: embedded at build time via esbuild define
-  const embedded = (process.env as any).EMBEDDED_AI_INSTRUCTIONS;
+function getInstructions(activityType?: string, deviceName?: string | null): string {
+  // Bundled mode: embedded instructions are keyed by type
+  const embeddedAll = (process.env as any).EMBEDDED_AI_INSTRUCTIONS as Record<string, string> | string | undefined;
   let raw = "";
-  if (typeof embedded === "string" && embedded.length > 100) raw = embedded;
-  else if (existsSync(INSTRUCTIONS_PATH)) raw = readFileSync(INSTRUCTIONS_PATH, "utf-8");
-  else {
+
+  if (activityType && typeof embeddedAll === "object" && embeddedAll !== null) {
+    // New format: embedded is a JSON object with keys: common, cycling, running, walk, surf, workout, garmin, ...
+    const typeKey = activityType.toLowerCase();
+    const commonPart: string = embeddedAll["common"] ?? "";
+    const typePart: string = embeddedAll[typeKey] ?? embeddedAll["workout"] ?? "";
+    const devPart: string = deviceName ? (embeddedAll[deviceName.toLowerCase()] ?? "") : "";
+    raw = [commonPart, typePart, devPart].filter(Boolean).join("\n\n---\n\n");
+  } else if (typeof embeddedAll === "string" && embeddedAll.length > 100) {
+    // Bundled: single embedded string (legacy bundle format)
+    raw = embeddedAll;
+  } else if (activityType && existsSync(INSTRUCTIONS_DIR)) {
+    raw = loadComposedInstructions(INSTRUCTIONS_DIR, activityType, deviceName);
+  } else {
     const cwdPath = join(process.cwd(), "AI_ANALYSIS_INSTRUCTIONS.md");
     if (existsSync(cwdPath)) raw = readFileSync(cwdPath, "utf-8");
   }
@@ -69,23 +84,11 @@ function prompt(question: string): Promise<string> {
   });
 }
 
-/** Strip excessive repeated characters (█░▓ spam) and duplicate markdown blocks */
-function sanitizeAIOutput(text: string): string {
-  let cleaned = text.replace(/(.)\1{9,}/g, (match, char) => char.repeat(Math.min(match.length, 10)));
-  cleaned = cleaned.replace(/^[█░▓\s]{20,}$/gm, "");
-  const marker = "## 🏆 POGAČAR SCORE";
-  const firstIdx = cleaned.indexOf(marker);
-  const secondIdx = firstIdx >= 0 ? cleaned.indexOf(marker, firstIdx + 1) : -1;
-  if (secondIdx > 0) cleaned = cleaned.substring(0, secondIdx).trimEnd();
-  return cleaned;
-}
-
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 // ─── Step 1: Fetch ───
-
 async function fetchActivitiesPage(client: AxiosInstance, perPage: number, page: number): Promise<SummaryActivity[]> {
   await rateLimitDelay();
   const response = await client.get("/athlete/activities", { params: { per_page: perPage, page } });
@@ -279,7 +282,13 @@ async function main() {
 
     // ─── Fetch weather (multi-point: 0/25/50/75% of route, parallel) ───
     const isIndoor = ["VirtualRide", "VirtualRun"].includes(enriched.activity.sport_type) || (enriched.activity as any).trainer === true;
-    const waypoints = isIndoor ? [] : buildWeatherWaypoints(streamTable as any[], enriched.activity.start_date);
+    const fallbackLatLng = enriched.activity.start_latlng ?? null;
+    const waypoints = isIndoor ? [] : buildWeatherWaypoints(
+      streamTable as any[],
+      enriched.activity.start_date,
+      fallbackLatLng,
+      enriched.activity.moving_time,
+    );
     let weather = null;
     if (isIndoor) {
       console.log(`   🏠 Indoor/virtual activity — skipping weather fetch.`);
@@ -318,7 +327,10 @@ async function main() {
 
     // Load wellness early so garminRestHr is available for crunch (improves VO2max accuracy)
     const actStartIso: string | null = exportData?.detailed_activity?.start_date_local ?? exportData?.detailed_activity?.start_date ?? null;
-    const wellnessCtx = loadWellnessContext(ANALYSIS_DIR, dateStr, actStartIso);
+    const utcOffset: number = exportData?.detailed_activity?.utc_offset
+      ? Math.round(exportData.detailed_activity.utc_offset / 3600)
+      : 0;
+    const wellnessCtx = loadWellnessContext(ANALYSIS_DIR, dateStr, actStartIso, utcOffset);
     const garminRestHr = wellnessCtx?.night_before?.resting_hr ?? null;
 
     const crunched = crunchActivity(exportData, rider, garminRestHr);
@@ -332,7 +344,7 @@ async function main() {
     console.log(`   📈 Pacing: ${crunched.pacing.type}`);
 
     // ═══ STEP 3: AI ANALYSIS ═══
-    const aiConfigs = loadAIConfig();
+    const aiConfigs = loadAiConfigs();
     let analysisText: string | null = null;
 
     // Always load enrichment context (used for AI payload AND no-AI fallback in Strava description)
@@ -358,43 +370,50 @@ async function main() {
       console.log(`   🏅 NEW PRs: ${prCheck.pr_labels.join(" | ")}`);
     }
 
-    if (aiConfigs) {
+    if (aiConfigs.length > 0) {
       console.log(`\n${"═".repeat(60)}`);
       console.log(`  🤖 STEP 3/4: AI analysis (${aiConfigs.map(c => c.provider.toUpperCase()).join(" → ")})...`);
       console.log(`${"═".repeat(60)}\n`);
 
-      const instructions = getInstructions();
+      // ─── Template + micro-calls path ─────────────────────────────────────
+      console.log(`   🏗️  Rendering template...`);
+      const skeleton = renderTemplate(crunched, historicalCtx, wellnessCtx);
+      const slots = getSlotNames(skeleton);
+      console.log(`   🎯 Slots: ${slots.length} (${slots.join(", ")})`);
 
-      const payload = {
-        activity_data: crunched,
-        ...(historicalCtx ? { historical_context: historicalCtx } : {}),
-        ...(wellnessCtx ? { garmin_wellness: wellnessCtx } : {}),
-        ...(prCheck && prCheck.pr_labels.length > 0 ? { personal_records_broken: prCheck } : {}),
-      };
-      const data = JSON.stringify(payload, (_, v) => v === null ? undefined : v);
-      const approxInputTokens = Math.round((instructions.length + data.length) / 4);
-      console.log(`   📊 Input: ~${approxInputTokens.toLocaleString()} tokens (instructions: ${Math.round(instructions.length / 4).toLocaleString()} + data: ${Math.round(data.length / 4).toLocaleString()})\n`);
+      const requests = buildInterpretationRequests(crunched, historicalCtx, wellnessCtx, slots);
+      const primaryCfg = aiConfigs[0];
+      console.log(`   🤖 ${requests.length} calls → ${primaryCfg.provider.toUpperCase()} (${primaryCfg.model})`);
 
-      for (let i = 0; i < aiConfigs.length; i++) {
-        const cfg = aiConfigs[i];
-        try {
-          console.log(`🤖 Trying ${cfg.provider.toUpperCase()} (${cfg.model})...`);
-          analysisText = sanitizeAIOutput(await callAI(cfg.provider, cfg.apiKey, cfg.model, instructions, data));
-          const approxOutputTokens = Math.round(analysisText.length / 4);
-          const analysisPath = join(ANALYSIS_DIR, `activity_${activityId}_${dateStr}_${safeName}_analysis.md`);
-          writeFileSync(analysisPath, analysisText, "utf-8");
-          console.log(`✅ AI analysis saved: ${basename(analysisPath)}`);
-          console.log(`   📊 Output: ~${approxOutputTokens.toLocaleString()} tokens | ${analysisText.split(/\s+/).length.toLocaleString()} words | ${analysisText.length.toLocaleString()} chars`);
-          break;
-        } catch (err: any) {
-          const next = i + 1 < aiConfigs.length ? aiConfigs[i + 1] : null;
-          if (next) {
-            console.log(`⚠️  ${cfg.provider.toUpperCase()} failed: ${err.message}`);
-            console.log(`   🔄 Falling back to ${next.provider.toUpperCase()} (${next.model})...`);
-          } else {
-            console.error(`⚠️  AI analysis failed: ${err.message}`);
-            console.log(`   Continuing without AI analysis — will use structured fallback for notes.`);
+      const start = Date.now();
+      try {
+        const interpretations = await callAIBatch(primaryCfg, requests);
+        const elapsed = ((Date.now() - start) / 1000).toFixed(1);
+        analysisText = fillSlots(skeleton, interpretations);
+        const analysisPath = join(ANALYSIS_DIR, `activity_${activityId}_${dateStr}_${safeName}_analysis.md`);
+        writeFileSync(analysisPath, analysisText, "utf-8");
+        console.log(`✅ AI analysis saved in ${elapsed}s: ${basename(analysisPath)}`);
+      } catch (err: any) {
+        const slotInfo = err.failedSlot ? ` (slot: ${err.failedSlot})` : "";
+        const httpStatus = err.response?.status ? ` [HTTP ${err.response.status}]` : "";
+        if (aiConfigs.length > 1) {
+          console.log(`⚠️  ${aiConfigs[0].provider.toUpperCase()} failed${slotInfo}${httpStatus}: ${err.message}`);
+          console.log(`   🔄 Retrying with ${aiConfigs[1].provider.toUpperCase()} (${aiConfigs[1].model})...`);
+          try {
+            const interpretations = await callAIBatch(aiConfigs[1], requests);
+            analysisText = fillSlots(skeleton, interpretations);
+            const analysisPath = join(ANALYSIS_DIR, `activity_${activityId}_${dateStr}_${safeName}_analysis.md`);
+            writeFileSync(analysisPath, analysisText, "utf-8");
+            console.log(`✅ AI analysis saved: ${basename(analysisPath)}`);
+          } catch (err2: any) {
+            const slotInfo2 = err2.failedSlot ? ` (slot: ${err2.failedSlot})` : "";
+            const httpStatus2 = err2.response?.status ? ` [HTTP ${err2.response.status}]` : "";
+            console.error(`⚠️  AI analysis failed${slotInfo2}${httpStatus2}: ${err2.message}`);
+            console.log(`   Continuing without AI analysis — will use structured fallback.`);
           }
+        } else {
+          console.error(`⚠️  AI analysis failed${slotInfo}${httpStatus}: ${err.message}`);
+          console.log(`   Continuing without AI analysis — will use structured fallback.`);
         }
       }
     } else {

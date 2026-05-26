@@ -14,7 +14,7 @@
 ```
 Strava API  →  Download  →  Crunch (30+ metrics)  →  AI Analysis  →  Push to Strava
                                                            ↓
-                                               Historical baselines (7d/30d/90d/365d)
+                                               Historical baselines (7d/30d/90d/180d)
                                                Garmin wellness (HRV/sleep/Body Battery)
                                                Personal records check
                                                            ↓
@@ -25,7 +25,7 @@ Strava API  →  Download  →  Crunch (30+ metrics)  →  AI Analysis  →  Pus
 Pick an activity, and the tool will:
 1. **Download** all data from Strava (details, laps, zones, second-by-second streams, segments)
 2. **Crunch** every data point locally — zero sampling, zero cloud processing
-3. **Analyze** via AI — enriched with historical baselines, Garmin readiness data, and PR detection
+3. **Analyze** via AI — template renders structure deterministically; ~15 sequential AI micro-calls fill interpretation slots (verdict, tips, comparisons, etc.); each slot gets a few-shot example for style consistency; slot outputs are validated before saving; token usage logged per call
 4. **Push** the analysis back to your Strava activity description + private notes
 
 Beyond single-activity analysis, the tool also provides:
@@ -68,7 +68,7 @@ npm run garmin
 | Activity | Score | Metrics |
 |----------|-------|---------|
 | 🚴 **Cycling** (Road, Gravel, MTB, E-Bike, Virtual) | 🏅 Category Score + Pogačar Factor | NP, IF, TSS, W/kg, Power Zones, Cadence Zones, Torque, VAM, Gradient |
-| 🏃 **Running** (Road, Trail, Virtual) | 🏅 Runner Category Score + Kipchoge Factor | Pace, Best Efforts, Power (if available), IF, TSS, HR Zones (LTHR), Cadence Zones |
+| 🏃 **Running** (Road, Trail, Virtual) | 🏅 Runner Category Score + Kipchoge Factor | Pace, Best Efforts, IF, TSS, HR Zones (LTHR), Cadence Zones (spm), Power/W/kg/Torque/Gradient/VAM (if power meter present) |
 | 🏋️ **Workout** (HIIT, Strength, CrossFit, Yoga…) | 🏋️ Workout Score (WIS) | HR Zones, Interval Detection, HR Recovery Rate, Consistency, EPOC |
 | 🚶 **Walking / Hiking** | — | HR analysis (maxHR%), Heart Points, Elevation, Speed Zones, Cadence Zones |
 | 🏄 **Surfing** | — | Wave count, Max wave speed, Paddle/Ride ratio, Speed zones |
@@ -133,7 +133,7 @@ All metrics are computed locally from raw stream data. No sampling — every dat
 - 🏅 **Runner Category Score** — 7-tier system (Beginner → Elite/Pro) scoring vs your pace tier's ceiling. Same structure as cycling Category Score, includes `tier_position`.
 - 🏆 **Kipchoge Factor** — composite % vs Eliud Kipchoge (pace, running economy, cadence) — fun-fact footnote
 - 🏅 **Best Efforts** — PRs at standard distances (400m → 10K)
-- ⚙️ **IF / TSS / Power Zones** — when running power meter present (uses `RUNNER_RFTP_W`)
+- ⚙️ **IF / TSS / Power Zones / W/kg / Torque / Gradient / VAM** — when running power meter present (uses `RUNNER_RFTP_W`)
 
 ### Workout Metrics (gym, HIIT, CrossFit, yoga — HR only, no GPS)
 - 🏋️ **Workout Intensity Score (WIS)** — zone-weighted 0–100 with label
@@ -184,7 +184,9 @@ The tool auto-detects available API keys and falls back in order:
 | 3 | **OpenRouter** | 💰 Pay-per-use | `deepseek/deepseek-chat-v3-0324` |
 | 4 | **OpenAI** | 💰 Pay-per-use | `gpt-4o` |
 
-> **No API key?** Run `npm start` + `npm run crunch`, then paste the crunched JSON into any AI chat manually.
+Token usage (sent ↑ / received ↓) is logged per call and accumulated as a session total in the terminal output.
+
+> **No API key?** Run `npm start` + `npm run crunch`, then paste the crunched JSON into any AI chat with `instructions/common.md` + the matching activity-type file as the system prompt.
 
 ---
 
@@ -232,9 +234,19 @@ Strava API: **100 requests / 15 min**, **1,000 / day**. Each activity ≈ 4 API 
 |-----|----------|
 | **[COMMANDS.md](COMMANDS.md)** | Full user guide — setup, all commands with examples, workflow, tips |
 | **[METRICS.md](METRICS.md)** | Every metric explained with interpretation tables |
-| **[AI_ANALYSIS_INSTRUCTIONS.md](AI_ANALYSIS_INSTRUCTIONS.md)** | Format instructions for single-activity AI report |
+| **[REFACTORING_PLAN.md](REFACTORING_PLAN.md)** | AI pipeline architecture — decisions, slot registry, few-shot & validation design |
+| **[instructions/common.md](instructions/common.md)** | Shared AI output format rules (zones, weather, history, Garmin readiness) |
+| **[instructions/cycling.md](instructions/cycling.md)** | AI format instructions for cycling activities |
+| **[instructions/running.md](instructions/running.md)** | AI format instructions for running activities |
+| **[instructions/walk.md](instructions/walk.md)** | AI format instructions for walk/hike activities |
+| **[instructions/surf.md](instructions/surf.md)** | AI format instructions for surfing activities |
+| **[instructions/workout.md](instructions/workout.md)** | AI format instructions for gym/HIIT/workout activities |
+| **[instructions/devices/garmin.md](instructions/devices/garmin.md)** | Garmin-specific field explanations (Body Battery, HRV, Training Effect) |
+| **[instructions/examples/](instructions/examples/)** | Few-shot prompt examples — one `.md` per AI slot (edit to tune output style) |
 | **[AI_COMPARE_INSTRUCTIONS.md](AI_COMPARE_INSTRUCTIONS.md)** | Format instructions for trend comparison report |
 | **[AI_DIGEST_INSTRUCTIONS.md](AI_DIGEST_INSTRUCTIONS.md)** | Format instructions for weekly digest report |
+
+> **Instruction files are split by activity type** — used for manual analysis. The default pipeline (`npm run analyze` / `npm run fast`) uses a **template engine** that renders all structure deterministically in TypeScript, then fires ~15 sequential AI micro-calls (one per interpretation slot). Each slot uses a **few-shot example** loaded from `instructions/examples/{slot}.md` to anchor output style — add or edit these files to tune AI responses without touching code. Every slot response is **validated** (length, number presence, format rules) and warnings are logged to the terminal; the pipeline is never blocked. Sequential execution avoids rate-limit (429) errors; concurrency can be raised in `ai_client.ts` (`AI_CONCURRENCY` constant).
 
 ---
 

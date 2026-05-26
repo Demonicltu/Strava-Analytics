@@ -91,7 +91,7 @@ Copy the `refresh_token` from the response into your `.env` file.
 npm run fast
 ```
 
-Pick an activity → automatically fetches, crunches, sends to AI (enriched with historical context + Garmin wellness if available), and updates Strava. Loops back to activity list after each update. Press `q` to quit.
+Pick an activity → automatically fetches, crunches, renders the template skeleton, fires sequential AI micro-calls to fill interpretation slots (with few-shot examples + output validation + token usage logging), and updates Strava. Loops back to activity list after each update. Press `q` to quit.
 
 **Navigation:** `n` = next page, `p` = previous page (10 activities per page).
 
@@ -144,7 +144,7 @@ npm run crunch
 
 **Output:** `analysis/*_crunched.json` (5-40 KB — all math pre-done)
 
-**Note:** Set `RIDER_WEIGHT_KG`, `RIDER_FTP_W`, `RIDER_MAX_HR`, `RIDER_LTHR` in `.env` to unlock advanced metrics. For running, optionally set `RUNNER_RFTP_W`, `RUNNER_MAX_HR`, `RUNNER_LTHR`. Without FTP, IF/TSS/power zones won't be computed.
+**Note:** Set `RIDER_WEIGHT_KG`, `RIDER_FTP_W`, `RIDER_MAX_HR`, `RIDER_LTHR` in `.env` to unlock advanced metrics. For running, optionally set `RUNNER_RFTP_W`, `RUNNER_MAX_HR`, `RUNNER_LTHR`. Without FTP, IF/TSS/power zones won't be computed. Running activities with a power meter (e.g. Stryd) also get: W/kg, Power Skills, Torque, Gradient Analysis, VAM — same as cycling.
 
 ---
 
@@ -154,13 +154,17 @@ npm run crunch
 npm run analyze
 ```
 
-**What it does:**
+**What it does (template + micro-calls pipeline):**
 - Lists available crunched files
 - You pick one
 - Automatically loads **historical context** (1w/1mo/3mo/6mo baselines for the same sport) from existing crunched files — no extra API calls
 - Automatically loads **Garmin wellness** for that day (HRV, sleep, Body Battery, training status, acute load, stress) if `garmin_wellness.json` exists
-- Sends enriched payload to AI (Gemini → Groq → OpenRouter → OpenAI, auto-fallback)
-- AI writes: activity score, summary, performance verdict, detailed analysis, **historical comparison**, **readiness context**, actionable tips
+- **Renders a deterministic markdown skeleton** from the crunched JSON (`template.ts`) — all tables, headers, numbers, zones, VAM table, torque section, segments are generated in TypeScript; structure is guaranteed to be correct regardless of AI model
+- **Fires ~15 sequential micro AI calls** (`interpret.ts`) — one per interpretation slot (verdict, pacing, cardiac drift, power, tips, historical comparison, etc.) — each call is ~100–400 tokens; sequential execution avoids 429 rate-limit errors; concurrency controlled by `AI_CONCURRENCY` in `ai_client.ts` (default: 1)
+- **Few-shot examples** per slot loaded from `instructions/examples/{slot}.md` — appended to each AI request to anchor output tone and format; edit any file to tune without touching code
+- **Output validation** — each slot response is checked against rules (length, numbers, banned phrases, bullet format, emoji) and warnings are logged; pipeline never blocks on validation
+- **Logs token usage** per call (sent ↑ / received ↓) and session totals
+- Slots are filled into the skeleton; unfilled slots are removed cleanly
 - Saves the markdown analysis
 
 **Output:** `analysis/*_analysis.md`
@@ -197,7 +201,7 @@ npm start        # download activity
 npm run crunch   # pre-analyze
 ```
 
-Then share the `analysis/*_crunched.json` file with the AI and ask it to analyze following the `AI_ANALYSIS_INSTRUCTIONS.md` format.
+Then share the `analysis/*_crunched.json` file with the AI and ask it to analyze following the instructions from `instructions/` — use `instructions/common.md` + the matching activity-type file (e.g. `instructions/cycling.md` for a ride). For Garmin devices add `instructions/devices/garmin.md`.
 
 ---
 
@@ -208,9 +212,18 @@ strava-extractor/
 ├── .env                          # Your credentials + rider profile + Garmin credentials
 ├── .env.example                  # Template
 ├── .garmin_session.json          # Cached Garmin session token (auto-created, gitignored)
-├── AI_ANALYSIS_INSTRUCTIONS.md   # Instructions for single-activity AI analysis
 ├── AI_COMPARE_INSTRUCTIONS.md    # Instructions for trend/comparison AI analysis
 ├── AI_DIGEST_INSTRUCTIONS.md     # Instructions for weekly/monthly digest AI report
+├── instructions/                 # Per-activity-type AI analysis instructions (split for token efficiency)
+│   ├── common.md                     # Shared rules (output format, zones, weather, history, Garmin)
+│   ├── cycling.md                    # Cycling-specific (amateur score, power, VAM, torque, cadence)
+│   ├── running.md                    # Running-specific (runner score, pace, best efforts, power/torque/gradient/VAM if power meter)
+│   ├── walk.md                       # Walk/hike (minimal, casual tone)
+│   ├── surf.md                       # Surfing (wave report, paddle/ride ratio)
+│   ├── workout.md                    # Gym/HIIT (WIS score, interval detection, HR recovery)
+│   ├── examples/                     # Few-shot examples per AI slot (loaded automatically)
+│   └── devices/
+│       └── garmin.md                 # Garmin-specific (Training Effect, Body Battery, HRV quirks)
 ├── garmin_sync.py                # Garmin Connect wellness sync script
 ├── requirements.txt              # Python dependencies (garminconnect)
 ├── dashboard.html                # Generated static dashboard (open in browser)
@@ -235,7 +248,13 @@ strava-extractor/
     ├── digest.ts         # npm run digest (weekly/monthly digest + overtraining check)
     ├── records.ts        # npm run records (personal records tracker)
     ├── dashboard.ts      # npm run dashboard (static HTML dashboard)
-    ├── crunch.ts         # Shared: all metric computations
+    ├── template.ts       # Shared: deterministic markdown skeleton from crunched JSON
+│   ├── interpret.ts      # Shared: builds focused AI micro-call requests per slot (with few-shot examples)
+│   ├── ai_client.ts      # Shared: AI provider layer (Gemini / OpenAI-compat / batch calls + validation)
+│   ├── few_shot.ts       # Shared: loads few-shot examples from instructions/examples/
+│   ├── validate.ts       # Shared: validates AI slot output quality (log-only)
+│   ├── crunch.ts         # Shared: all metric computations
+│   ├── instructions.ts   # Shared: compose per-activity-type AI instructions
     ├── summary_utils.ts  # Shared: compact activity summaries + historical context + PR check
     ├── wellness.ts       # Shared: Garmin wellness context reader
     ├── activities.ts     # Paginated activity list fetching
@@ -538,13 +557,15 @@ npm run dashboard     # regenerate HTML dashboard
 - **Rate limits:** Strava allows 100 requests per 15 min, 1000 per day. Each activity download uses ~4 requests + 1 request per UTC hour covered (weather).
 - **Weather:** Fetched automatically during `npm start` / `npm run fast` from [Open-Meteo](https://open-meteo.com/) — free, no API key needed. Short activities (< 1 hour) use 1 call. Multi-hour rides use one call per hour spanned, at the GPS coordinates for that hour.
 - **Large activities:** The `crunch` step handles any size — it processes all data points locally, no sampling.
-- **Gemini free tier:** The enriched payload (crunched + history + Garmin) is typically 15–40 KB, well under the free tier limit.
+- **Gemini free tier:** The enriched payload (crunched + history + Garmin) is typically 15–40 KB, well under the free tier limit. Token usage (sent ↑ / received ↓ per call + session total) is logged to the terminal automatically.
+- **AI output style:** Each AI interpretation slot loads a few-shot example from `instructions/examples/{slot}.md`. Edit any file to adjust tone, format, or length for that specific slot — no code changes needed.
+- **AI output validation:** Slot responses are automatically checked for quality (min/max length, data-driven numbers, no filler phrases, bullet format, emoji where required). Validation warnings are logged but never block the pipeline. Rules are defined per-slot in `src/validate.ts`.
 - **Re-running:** You can re-run any step independently. `crunch` overwrites the previous crunched file. `analyze` overwrites the analysis. `update` always previews before pushing.
 - **Updating rider config:** If you change `RIDER_FTP_W`, `RIDER_WEIGHT_KG`, or `RIDER_MAX_HR`, run `npm run recrunch` to recompute all historical metrics with the new values — no API calls needed.
 - **Description vs Notes:** Description (public) contains the full analysis. Private notes (only you) contain short actionable tips — optimized for mobile viewing.
 - **Rider config:** Set `RIDER_WEIGHT_KG`, `RIDER_FTP_W`, `RIDER_MAX_HR`, `RIDER_LTHR` in `.env` for advanced metrics. For running, optionally set `RUNNER_RFTP_W`, `RUNNER_MAX_HR`, `RUNNER_LTHR`. Without FTP, IF/TSS/power zones won't be computed.
 - **Garmin MFA:** First login sends a one-time code to your email. Enter it in the terminal. After that the session is cached and no more MFA prompts until the session expires (typically weeks).
-- **Historical context:** Automatically included when `analysis/` contains ≥3 crunched files for the same sport. Shows 1w/1mo/3mo/6mo baselines and how this activity compares.
+- **Historical context:** Automatically included when `analysis/` contains ≥3 crunched files for the same sport. Shows 1w/1mo/3mo/6mo baselines and how this activity compares. Includes best 20min power, TRIMP Load, and a Trend assessment.
 - **Sport grouping:** `compare` and historical context group `Ride + GravelRide + MountainBikeRide` together, `Run + TrailRun` together, etc. — comparisons stay sport-appropriate.
 - **Personal records:** Run `npm run records` after `npm run bulk` for complete history. Records are auto-compared against previous run — new PRs flagged with 🔥. All-time records also auto-injected into single-activity AI analysis.
 - **Overtraining warning:** `npm run digest` computes acute:chronic load ratio from your TRIMP/TSS data. Load ratio >1.3 = danger zone. If Garmin data is present, HRV trend is also checked for convergent signal.

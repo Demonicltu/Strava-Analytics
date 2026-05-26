@@ -653,7 +653,7 @@ Data comes from the athlete's **Garmin Fenix 7 Pro Solar** watch. `night_before`
 4. **The Pogačar Score is for fun** — always frame positively. 40-60% of the best cyclist ever is impressive
 5. **Adapt ALL language to activity type:**
    - **Cycling (Ride/VirtualRide):** "RIDE SUMMARY", 🚴, "Avg Speed", mention cadence/power/watts. Pogačar score.
-   - **Running (Run/TrailRun):** "RUN SUMMARY", 🏃, "Avg Pace" (show min:sec/km), skip cadence/power/watts sections. Kipchoge score.
+   - **Running (Run/TrailRun):** "RUN SUMMARY", 🏃, "Avg Pace" (show min:sec/km). Kipchoge score. Include power/torque/gradient/VAM sections if data exists (Stryd or similar power meter). Never use "rpm" — use "spm" for stride rate.
    - **Walking (Walk/Hike):** "WALK SUMMARY", 🚶, "Avg Pace" (show min:sec/km), skip cadence/power/watts/torque/power zones. No Pogačar or Kipchoge score — just the summary card and HR analysis. Keep it simple.
    - **Surfing:** "SURF SESSION", 🏄, "Avg Speed" in km/h. Start with the 🏄 WAVE REPORT (section 4.12). Skip power/cadence/torque/gradient/VAM/power zones. Focus on wave count, max wave speed, paddle-to-ride ratio, HR analysis, and conditions. No Pogačar or Kipchoge score. Never use "ride" or "cycling" words — use "session", "paddle", "wave".
    - Never use "ride" or "cycling" words for walks/runs/surf. Use "walk", "hike", "run", "session" appropriately throughout.

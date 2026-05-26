@@ -5,5 +5,4 @@ analysis/
 release/.env
 release/.env_2
 .env
-
-.garmin_session.json
+.garmin_session

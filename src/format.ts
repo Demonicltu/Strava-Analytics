@@ -574,6 +574,13 @@ export function buildDescription(crunched: any, analysisText: string | null, his
       { keyword: "Workout Analysis", emoji: "🏋️" },
       { keyword: "Effort Intervals", emoji: "⚡" },
       { keyword: "Cadence", emoji: "🔄" },
+    // ] : cat === "walk" ? [
+    //   { keyword: "Training Load", emoji: "🏋️" },
+    //   { keyword: "Heart Rate", emoji: "❤️" },
+    //   { keyword: "Cadence", emoji: "🔄" },
+    //   { keyword: "Climbing", emoji: "⛰️" },
+    //   { keyword: "Gradient", emoji: "📐" },
+    //   { keyword: "Pacing", emoji: "📈" },
     ] : [
       { keyword: "Training Load", emoji: "🏋️" },
       { keyword: "Heart Rate", emoji: "❤️" },
