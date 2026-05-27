@@ -95,7 +95,7 @@ const SLOT_RULES: Record<string, SlotRules> = {
     requiresNumbers: true,
     requiresBullets: true,
     requiresEmoji: true,
-    maxLength: 3000,
+    maxLength: 6000,
   },
   readiness_verdict: {
     requiresNumbers: true,

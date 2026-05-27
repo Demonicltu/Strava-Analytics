@@ -23,30 +23,30 @@
         <div class='clearfix'>
             
             <div class='fl pad1y space-right2'>
-                <span class="strong">85.26% </span>
+                <span class="strong">85.2% </span>
                 <span class="quiet">Statements</span>
-                <span class='fraction'>544/638</span>
+                <span class='fraction'>547/642</span>
             </div>
         
             
             <div class='fl pad1y space-right2'>
-                <span class="strong">67.03% </span>
+                <span class="strong">66.66% </span>
                 <span class="quiet">Branches</span>
-                <span class='fraction'>364/543</span>
+                <span class='fraction'>370/555</span>
             </div>
         
             
             <div class='fl pad1y space-right2'>
-                <span class="strong">87.5% </span>
+                <span class="strong">87.75% </span>
                 <span class="quiet">Functions</span>
-                <span class='fraction'>42/48</span>
+                <span class='fraction'>43/49</span>
             </div>
         
             
             <div class='fl pad1y space-right2'>
-                <span class="strong">86.38% </span>
+                <span class="strong">86.43% </span>
                 <span class="quiet">Lines</span>
-                <span class='fraction'>495/573</span>
+                <span class='fraction'>497/575</span>
             </div>
         
             
@@ -984,7 +984,9 @@
 <a name='L919'></a><a href='#L919'>919</a>
 <a name='L920'></a><a href='#L920'>920</a>
 <a name='L921'></a><a href='#L921'>921</a>
-<a name='L922'></a><a href='#L922'>922</a></td><td class="line-coverage quiet"><span class="cline-any cline-neutral">&nbsp;</span>
+<a name='L922'></a><a href='#L922'>922</a>
+<a name='L923'></a><a href='#L923'>923</a>
+<a name='L924'></a><a href='#L924'>924</a></td><td class="line-coverage quiet"><span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
@@ -1796,6 +1798,8 @@
 <span class="cline-any cline-yes">3x</span>
 <span class="cline-any cline-yes">3x</span>
 <span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
@@ -2166,7 +2170,7 @@ function renderHR(c: any): string {
   <span class="missing-if-branch" title="if path not taken" >I</span>if (hr.peak_efforts) {
 <span class="cstat-no" title="statement not covered" >    lines.push(`**Peak HR efforts:**`);</span>
 <span class="cstat-no" title="statement not covered" >    for (const [dur, val] of Object.entries(hr.peak_efforts)) {</span>
-<span class="cstat-no" title="statement not covered" >      lines.push(`- Best ${dur} HR: ${val} bpm`);</span>
+<span class="cstat-no" title="statement not covered" >      lines.push(`- Best ${dur} HR: ${val}`);</span>
     }
 <span class="cstat-no" title="statement not covered" >    lines.push(``);</span>
   }
@@ -2214,7 +2218,7 @@ function renderPower(c: any): string {
 <span class="cstat-no" title="statement not covered" >    lines.push(``);</span>
 <span class="cstat-no" title="statement not covered" >    lines.push(mdTable(</span>
       ["Duration", "Power"],
-      Object.entries(pw.best_efforts).<span class="fstat-no" title="function not covered" >map(([</span>k, v]) =&gt; <span class="cstat-no" title="statement not covered" >[k, `${v} W`])</span>
+      Object.entries(pw.best_efforts).<span class="fstat-no" title="function not covered" >map(([</span>k, v]) =&gt; <span class="cstat-no" title="statement not covered" >[k, `${v}`])</span>
     ));
 <span class="cstat-no" title="statement not covered" >    lines.push(``);</span>
   }
@@ -2289,7 +2293,7 @@ function renderPowerToWeight(c: any): string {
       ["Avg W/kg", `${n(ptw.avg_wkg, 2)} W/kg`],
       ["NP W/kg",  `${n(ptw.np_wkg, 2)} W/kg`],
       ["FTP W/kg", `${n(ptw.ftp_wkg, 2)} W/kg`],
-      ["Estimated Level", ptw.estimated_level ?? <span class="branch-1 cbranch-no" title="branch not covered" >"—"]</span>,
+      ["Estimated Level", c.amateur_score?.category ?? <span class="branch-1 cbranch-no" title="branch not covered" >ptw.estimated_level ?? <span class="branch-2 cbranch-no" title="branch not covered" >"</span>—"]</span>,
     ]
   ));
   lines.push(``);
@@ -2700,17 +2704,19 @@ function renderHistorical(historical: any): string {
   const qmHeaders = ["Period", "Avg TSS", "Avg EF", "Avg Z2%", "Best 20min W", "Avg VI", "Avg Drift", "Avg Decoupling", "Avg VO2max"];
   const qmRows = bases.map((b: any) =&gt; [
     b.period_label,
-    b.avg_tss ? String(n(b.avg_tss)) : "—",
+    b.avg_tss ? `${String(n(b.avg_tss))}${b.tss_is_hr_based ? <span class="branch-0 cbranch-no" title="branch not covered" >"†" : "</span>"}` : "—",
     b.avg_efficiency_factor ? <span class="branch-0 cbranch-no" title="branch not covered" >String(b.avg_efficiency_factor) : "</span>—",
     b.avg_z2_pct ? <span class="branch-0 cbranch-no" title="branch not covered" >`${n(b.avg_z2_pct)}%` : "</span>—",
     (b.avg_best_20min_power_w ?? b.best_20min_power_w) ? `${n(b.avg_best_20min_power_w ?? <span class="branch-1 cbranch-no" title="branch not covered" >b.best_20min_power_w)</span>} W` : "—",
-    (b.avg_variability_index ?? b.avg_vi) ? String(b.avg_variability_index ?? <span class="branch-1 cbranch-no" title="branch not covered" >b.avg_vi)</span> : "—",
+    (b.avg_variability_index ?? b.avg_vi) ? `${String(b.avg_variability_index ?? <span class="branch-1 cbranch-no" title="branch not covered" >b.avg_vi)</span>}${b.vi_is_pace_based ? <span class="branch-0 cbranch-no" title="branch not covered" >"†" : "</span>"}` : "—",
     b.avg_cardiac_drift_bpm != null ? <span class="branch-0 cbranch-no" title="branch not covered" >`${b.avg_cardiac_drift_bpm &gt; 0 ? "+" : ""}${n(b.avg_cardiac_drift_bpm)} bpm` : "</span>—",
-    b.avg_aerobic_decoupling_pct != null ? <span class="branch-0 cbranch-no" title="branch not covered" >`${n(b.avg_aerobic_decoupling_pct, 1)}%` : "</span>—",
+    b.avg_aerobic_decoupling_pct != null ? <span class="branch-0 cbranch-no" title="branch not covered" >`${n(b.avg_aerobic_decoupling_pct, 1)}%${b.decoupling_is_drift ? "†" : ""}` : "</span>—",
     b.avg_vo2max ? <span class="branch-0 cbranch-no" title="branch not covered" >String(n(b.avg_vo2max, 1)) : "</span>—",
   ]);
   lines.push(mdTable(qmHeaders, qmRows));
   lines.push(`\`\`\``);
+  const hasHrFallback = bases.some((b: any) =&gt; b.tss_is_hr_based || b.vi_is_pace_based || b.decoupling_is_drift);
+  <span class="missing-if-branch" title="if path not taken" >I</span>if (hasHrFallback) <span class="cstat-no" title="statement not covered" >lines.push(`_† estimated from HR/pace data (no power meter)_`);</span>
   lines.push(``);
   lines.push(`**This activity vs. your baselines**`);
   lines.push(``);
@@ -2833,7 +2839,7 @@ export function getSlotNames(skeleton: string): string[] {
             <div class='footer quiet pad2 space-top1 center small'>
                 Code coverage generated by
                 <a href="https://istanbul.js.org/" target="_blank" rel="noopener noreferrer">istanbul</a>
-                at 2026-05-26T21:50:25.264Z
+                at 2026-05-27T21:44:46.749Z
             </div>
         <script src="prettify.js"></script>
         <script>

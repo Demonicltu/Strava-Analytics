@@ -259,7 +259,7 @@ function renderHR(c: any): string {
   if (hr.peak_efforts) {
     lines.push(`**Peak HR efforts:**`);
     for (const [dur, val] of Object.entries(hr.peak_efforts)) {
-      lines.push(`- Best ${dur} HR: ${val} bpm`);
+      lines.push(`- Best ${dur} HR: ${val}`);
     }
     lines.push(``);
   }
@@ -307,7 +307,7 @@ function renderPower(c: any): string {
     lines.push(``);
     lines.push(mdTable(
       ["Duration", "Power"],
-      Object.entries(pw.best_efforts).map(([k, v]) => [k, `${v} W`])
+      Object.entries(pw.best_efforts).map(([k, v]) => [k, `${v}`])
     ));
     lines.push(``);
   }
@@ -382,7 +382,7 @@ function renderPowerToWeight(c: any): string {
       ["Avg W/kg", `${n(ptw.avg_wkg, 2)} W/kg`],
       ["NP W/kg",  `${n(ptw.np_wkg, 2)} W/kg`],
       ["FTP W/kg", `${n(ptw.ftp_wkg, 2)} W/kg`],
-      ["Estimated Level", ptw.estimated_level ?? "—"],
+      ["Estimated Level", c.amateur_score?.category ?? ptw.estimated_level ?? "—"],
     ]
   ));
   lines.push(``);
@@ -793,17 +793,19 @@ function renderHistorical(historical: any): string {
   const qmHeaders = ["Period", "Avg TSS", "Avg EF", "Avg Z2%", "Best 20min W", "Avg VI", "Avg Drift", "Avg Decoupling", "Avg VO2max"];
   const qmRows = bases.map((b: any) => [
     b.period_label,
-    b.avg_tss ? String(n(b.avg_tss)) : "—",
+    b.avg_tss ? `${String(n(b.avg_tss))}${b.tss_is_hr_based ? "†" : ""}` : "—",
     b.avg_efficiency_factor ? String(b.avg_efficiency_factor) : "—",
     b.avg_z2_pct ? `${n(b.avg_z2_pct)}%` : "—",
     (b.avg_best_20min_power_w ?? b.best_20min_power_w) ? `${n(b.avg_best_20min_power_w ?? b.best_20min_power_w)} W` : "—",
-    (b.avg_variability_index ?? b.avg_vi) ? String(b.avg_variability_index ?? b.avg_vi) : "—",
+    (b.avg_variability_index ?? b.avg_vi) ? `${String(b.avg_variability_index ?? b.avg_vi)}${b.vi_is_pace_based ? "†" : ""}` : "—",
     b.avg_cardiac_drift_bpm != null ? `${b.avg_cardiac_drift_bpm > 0 ? "+" : ""}${n(b.avg_cardiac_drift_bpm)} bpm` : "—",
-    b.avg_aerobic_decoupling_pct != null ? `${n(b.avg_aerobic_decoupling_pct, 1)}%` : "—",
+    b.avg_aerobic_decoupling_pct != null ? `${n(b.avg_aerobic_decoupling_pct, 1)}%${b.decoupling_is_drift ? "†" : ""}` : "—",
     b.avg_vo2max ? String(n(b.avg_vo2max, 1)) : "—",
   ]);
   lines.push(mdTable(qmHeaders, qmRows));
   lines.push(`\`\`\``);
+  const hasHrFallback = bases.some((b: any) => b.tss_is_hr_based || b.vi_is_pace_based || b.decoupling_is_drift);
+  if (hasHrFallback) lines.push(`_† estimated from HR/pace data (no power meter)_`);
   lines.push(``);
   lines.push(`**This activity vs. your baselines**`);
   lines.push(``);

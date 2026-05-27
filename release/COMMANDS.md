@@ -91,7 +91,7 @@ Copy the `refresh_token` from the response into your `.env` file.
 npm run fast
 ```
 
-Pick an activity → automatically fetches, crunches, renders the template skeleton, fires sequential AI micro-calls to fill interpretation slots (with token usage logging), and updates Strava. Loops back to activity list after each update. Press `q` to quit.
+Pick an activity → automatically fetches, crunches, renders the template skeleton, fires sequential AI micro-calls to fill interpretation slots (with few-shot examples + output validation + token usage logging), and updates Strava. Loops back to activity list after each update. Press `q` to quit.
 
 **Navigation:** `n` = next page, `p` = previous page (10 activities per page).
 
@@ -161,6 +161,8 @@ npm run analyze
 - Automatically loads **Garmin wellness** for that day (HRV, sleep, Body Battery, training status, acute load, stress) if `garmin_wellness.json` exists
 - **Renders a deterministic markdown skeleton** from the crunched JSON (`template.ts`) — all tables, headers, numbers, zones, VAM table, torque section, segments are generated in TypeScript; structure is guaranteed to be correct regardless of AI model
 - **Fires ~15 sequential micro AI calls** (`interpret.ts`) — one per interpretation slot (verdict, pacing, cardiac drift, power, tips, historical comparison, etc.) — each call is ~100–400 tokens; sequential execution avoids 429 rate-limit errors; concurrency controlled by `AI_CONCURRENCY` in `ai_client.ts` (default: 1)
+- **Few-shot examples** per slot loaded from `instructions/examples/{slot}.md` — appended to each AI request to anchor output tone and format; edit any file to tune without touching code
+- **Output validation** — each slot response is checked against rules (length, numbers, banned phrases, bullet format, emoji) and warnings are logged; pipeline never blocks on validation
 - **Logs token usage** per call (sent ↑ / received ↓) and session totals
 - Slots are filled into the skeleton; unfilled slots are removed cleanly
 - Saves the markdown analysis
@@ -556,6 +558,8 @@ npm run dashboard     # regenerate HTML dashboard
 - **Weather:** Fetched automatically during `npm start` / `npm run fast` from [Open-Meteo](https://open-meteo.com/) — free, no API key needed. Short activities (< 1 hour) use 1 call. Multi-hour rides use one call per hour spanned, at the GPS coordinates for that hour.
 - **Large activities:** The `crunch` step handles any size — it processes all data points locally, no sampling.
 - **Gemini free tier:** The enriched payload (crunched + history + Garmin) is typically 15–40 KB, well under the free tier limit. Token usage (sent ↑ / received ↓ per call + session total) is logged to the terminal automatically.
+- **AI output style:** Each AI interpretation slot loads a few-shot example from `instructions/examples/{slot}.md`. Edit any file to adjust tone, format, or length for that specific slot — no code changes needed.
+- **AI output validation:** Slot responses are automatically checked for quality (min/max length, data-driven numbers, no filler phrases, bullet format, emoji where required). Validation warnings are logged but never block the pipeline. Rules are defined per-slot in `src/validate.ts`.
 - **Re-running:** You can re-run any step independently. `crunch` overwrites the previous crunched file. `analyze` overwrites the analysis. `update` always previews before pushing.
 - **Updating rider config:** If you change `RIDER_FTP_W`, `RIDER_WEIGHT_KG`, or `RIDER_MAX_HR`, run `npm run recrunch` to recompute all historical metrics with the new values — no API calls needed.
 - **Description vs Notes:** Description (public) contains the full analysis. Private notes (only you) contain short actionable tips — optimized for mobile viewing.

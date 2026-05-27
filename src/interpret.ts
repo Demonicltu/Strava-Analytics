@@ -250,7 +250,7 @@ function torqueRequest(c: any): AiRequest {
 function tipsRequest(c: any, digest: ActivityDigest, historical: any | null): AiRequest {
   return {
     slot: "tips",
-    system: `Write 3-5 actionable training tips as markdown bullet points starting with emoji. Each tip MUST reference a specific number from the data. Frame weaknesses as improvement opportunities. Format: "- **emoji Title** — specific advice with number." ${TONE}`,
+    system: `Write at least 3 actionable training tips as consecutive markdown bullet points with NO blank lines between them. Each tip MUST reference a specific number from the data. Frame weaknesses as improvement opportunities. Format: "- **emoji Title** — specific advice with number." ${TONE}`,
     user: JSON.stringify({
       sport: digest.sport,
       avg_hr: digest.avgHR,
@@ -269,7 +269,7 @@ function tipsRequest(c: any, digest: ActivityDigest, historical: any | null): Ai
       torque_avg_nm: c.torque?.avg_torque_nm ?? c.torque?.avg_nm,
       historical_avg_decoupling: historical?.baselines?.find((b: any) => b.days >= 160)?.avg_aerobic_decoupling_pct ?? null,
     }),
-    maxTokens: 300,
+    maxTokens: 350,
   };
 }
 
@@ -289,7 +289,7 @@ function historicalRequest(c: any, digest: ActivityDigest, historical: any): AiR
 
   return {
     slot: "historical_comparison",
-    system: `Write structured bullet comparison. Format per metric: "- emoji **Label:** X unit vs. N-month avg Y unit → context label emoji". Use ONLY these emojis for context labels: ⬆️ (higher/above avg), ⬇️ (lower/below avg), 🟢 (good/optimal), 🟡 (neutral/in range), 🔴 (concern/warning). Include units (bpm, W, rpm, %, etc). Include all available metrics: HR, power, NP, cadence (show avg + range p5-p95 if provided), TSS, Load (TRIMP), VI, cardiac drift, EF, Z2%, decoupling, VO2max, best 20min power. Use 3mo baseline for HR/power/cadence/TSS/VI/drift/TRIMP/best20min. Use 6mo baseline for EF/Z2%/decoupling/VO2max. Last bullet: "- 📈 **Trend:** Improving/Stable/Declining — 1-2 sentences explaining direction based on all compared metrics and PRs". Skip metrics where both this activity and baseline are null. ${TONE}`,
+    system: `Write structured bullet comparison. Format per metric: "- emoji **Label:** X unit vs. N-month avg Y unit → short explanation with context label emoji". After the → add 3-8 words of context (e.g. "higher = stronger effort ⬆️", "less Z2 = more intensity in this ride 🟡", "<3% = excellent base fitness 🟢", "rising = aerobic fitness improving 🟢"). Use ONLY these emojis for context labels: ⬆️ (higher/above avg), ⬇️ (lower/below avg), 🟢 (good/optimal), 🟡 (neutral/in range), 🔴 (concern/warning). Include units (bpm, W, rpm, %, etc). Include ALL of these metrics in order: HR, power, NP, cadence (show avg + range p5-p95 if provided), TSS, Load (TRIMP), VI, cardiac drift, EF, Z2%, decoupling, VO2max, best 20min power. Use 3mo baseline for HR/power/NP/cadence/TSS/VI/drift/TRIMP/best20min. Use 6mo baseline for EF/Z2%/decoupling/VO2max. Last bullet MUST be: "- 📈 **Trend:** Improving/Stable/Declining — 2-3 sentences explaining direction based on NP, EF, decoupling, TSS vs baseline and any PRs". Skip metrics where both this activity and baseline are null. ${TONE}`,
     user: JSON.stringify({
       this_activity: {
         avg_hr: digest.avgHR,
@@ -327,7 +327,7 @@ function historicalRequest(c: any, digest: ActivityDigest, historical: any): AiR
         avg_vo2max: slow.avg_vo2max,
       } : null,
     }),
-    maxTokens: 400,
+    maxTokens: 800,
   };
 }
 

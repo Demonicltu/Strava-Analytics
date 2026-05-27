@@ -36,6 +36,10 @@ export interface ActivitySummary {
   z2_pct: number | null;
   best_20min_power_w: number | null;
   aerobic_decoupling_pct: number | null;
+  // fallback flags
+  tss_is_hr_based: boolean;
+  vi_is_pace_based: boolean;
+  decoupling_is_drift: boolean;
 }
 
 export interface PeriodBaseline {
@@ -59,6 +63,10 @@ export interface PeriodBaseline {
   avg_aerobic_decoupling_pct: number | null;
   weekly_avg_distance_km: number | null;
   weekly_avg_trimp: number | null;
+  // fallback flags — true when any activity in window used HR/pace estimates
+  tss_is_hr_based: boolean;
+  vi_is_pace_based: boolean;
+  decoupling_is_drift: boolean;
 }
 
 /** Minimum historical activities required per period to emit a baseline */
@@ -150,6 +158,49 @@ export function extractSummary(raw: any, filename: string): ActivitySummary | nu
     const trimpRaw = raw.relative_effort?.score ?? null;
     const vo2maxRaw = raw.vo2max?.value ?? null;
 
+    // ─── Fallbacks for power-less activities ───
+    const movingTimeSec: number = raw.summary_card?.moving_time_seconds ?? 0;
+    const elapsedTimeSec: number = raw.summary_card?.elapsed_time_seconds ?? movingTimeSec;
+    const moveRatio = elapsedTimeSec > 0 ? movingTimeSec / elapsedTimeSec : 1;
+
+    // TSS fallback: use TRIMP when no power-based TSS
+    let tssVal: number | null = tssRaw != null ? Math.round(tssRaw) : null;
+    let tss_is_hr_based = false;
+    if (tssVal == null && trimpRaw != null) {
+      tssVal = Math.round(trimpRaw);
+      tss_is_hr_based = true;
+    }
+
+    // Pace-based VI fallback: 4th-power normalised speed / mean speed
+    let viVal: number | null = raw.power?.variability_index ?? null;
+    let vi_is_pace_based = false;
+    if (viVal == null && moveRatio > 0.9) {
+      const windows: any[] = Array.isArray(raw.five_minute_windows) ? raw.five_minute_windows : [];
+      const speeds = windows.map((w: any) => w.avg_speed_kmh).filter((s: any) => typeof s === "number" && s > 0);
+      if (speeds.length >= 3) {
+        const mean = speeds.reduce((a: number, b: number) => a + b, 0) / speeds.length;
+        const np4 = Math.pow(
+          speeds.reduce((a: number, b: number) => a + Math.pow(b, 4), 0) / speeds.length,
+          0.25,
+        );
+        if (mean > 0) {
+          viVal = Math.round((np4 / mean) * 100) / 100;
+          vi_is_pace_based = true;
+        }
+      }
+    }
+
+    // Aerobic decoupling fallback: cardiac drift %
+    let decouplingVal: number | null = raw.aerobic_decoupling?.decoupling_pct ?? null;
+    let decoupling_is_drift = false;
+    if (decouplingVal == null) {
+      const driftPct: number | null = raw.heart_rate?.cardiac_drift?.drift_pct ?? null;
+      if (driftPct != null) {
+        decouplingVal = driftPct;
+        decoupling_is_drift = true;
+      }
+    }
+
     return {
       id,
       date,
@@ -165,7 +216,7 @@ export function extractSummary(raw: any, filename: string): ActivitySummary | nu
       avg_speed_kmh: null,
       avg_power_w: raw.power?.avg_power ?? null,
       normalized_power: np,
-      tss: tssRaw != null ? Math.round(tssRaw) : null,
+      tss: tssVal,
       trimp: trimpRaw != null ? Math.round(trimpRaw) : null,
       vo2max: vo2maxRaw ? Math.round(vo2maxRaw * 10) / 10 : null,
       calories: null,
@@ -174,11 +225,14 @@ export function extractSummary(raw: any, filename: string): ActivitySummary | nu
       efficiency_factor: ef,
       pace_sec_per_km: pace_sec,
       avg_cadence: raw.cadence?.stats?.avg ?? null,
-      variability_index: raw.power?.variability_index ?? null,
+      variability_index: viVal,
       cardiac_drift_bpm: raw.heart_rate?.cardiac_drift?.drift_bpm ?? null,
       z2_pct,
       best_20min_power_w: best_20min_power_w && !isNaN(best_20min_power_w) ? Math.round(best_20min_power_w) : null,
-      aerobic_decoupling_pct: raw.aerobic_decoupling?.decoupling_pct ?? null,
+      aerobic_decoupling_pct: decouplingVal,
+      tss_is_hr_based,
+      vi_is_pace_based,
+      decoupling_is_drift,
     };
   } catch {
     return null;
@@ -262,6 +316,9 @@ export function buildHistoricalContext(
       avg_aerobic_decoupling_pct: avg(inWindow.map(a => a.aerobic_decoupling_pct)),
       weekly_avg_distance_km: round2((distTotal ?? 0) / weeksInWindow),
       weekly_avg_trimp: round2(sum(inWindow.map(a => a.trimp)) / weeksInWindow),
+      tss_is_hr_based: inWindow.some(a => a.tss_is_hr_based),
+      vi_is_pace_based: inWindow.some(a => a.vi_is_pace_based),
+      decoupling_is_drift: inWindow.some(a => a.decoupling_is_drift),
     });
   }
 
