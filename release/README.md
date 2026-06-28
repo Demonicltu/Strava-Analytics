@@ -22,6 +22,8 @@ Pick an activity, and the tool will:
 1. **Download** all data from Strava (details, laps, zones, second-by-second streams, segments)
 2. **Crunch** every data point locally — zero sampling, zero cloud processing
 3. **Analyze** via AI (Gemini, Groq, OpenRouter, or OpenAI) for a written performance report
+   - Includes a deterministic **Training Recommendation** block (state/session, 24h/72h guidance, TSS targets, optional recovery ETA, 7-day microcycle)
+   - Explainability includes **top drivers** with friendly labels (stable internal codes shown secondarily), confidence breakdown, and rationale/signals context
 4. **Push** the analysis back to your Strava activity description + private notes
 
 ---
@@ -60,7 +62,7 @@ All activities get: **Heart Rate analysis**, **Cardiac Drift**, **Relative Effor
 | **`npm run fast`** | ⚡ **All-in-one** — download → crunch → AI → push to Strava |
 | `npm start` | Download activity data from Strava |
 | `npm run crunch` | Compute all metrics locally |
-| `npm run analyze` | Send to AI for written analysis |
+| `npm run analyze` | Send to AI for written analysis + deterministic recommendation/explainability |
 | `npm run update` | Push analysis to Strava description + notes |
 
 > `npm run fast` loops — after updating one activity, it returns to the activity list. Press `q` to quit.
@@ -126,7 +128,7 @@ strava-extractor/
 │   └── activity_<id>_<date>_<name>.json    (1-5 MB per activity)
 ├── analysis/                            # Processed results
 │   ├── *_crunched.json                     (10-40 KB — all metrics)
-│   └── *_analysis.md                       (AI-written report)
+│   └── *_analysis.md                       (AI-written report + deterministic recommendation block)
 ```
 
 ---
@@ -162,6 +164,10 @@ RIDER_REST_HR=56       # → More accurate TRIMP (optional, default 60)
 RUNNER_RFTP_W=300      # → Running IF, TSS, Power Zones
 RUNNER_MAX_HR=193      # → Running HR Zones, TRIMP
 RUNNER_LTHR=181        # → LTHR-based running HR zones
+
+# Training goal tuning (optional)
+# GOAL_EVENT_DATE=2026-09-12
+# GOAL_MODE=maintain     # build_fitness / maintain / fat_loss / race_prep
 ```
 
 ---

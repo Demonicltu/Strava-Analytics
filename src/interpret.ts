@@ -247,7 +247,9 @@ function torqueRequest(c: any): AiRequest {
   };
 }
 
-function tipsRequest(c: any, digest: ActivityDigest, historical: any | null): AiRequest {
+function tipsRequest(c: any, digest: ActivityDigest, historical: any | null, wellness: any | null): AiRequest {
+  const n = wellness?.night_before ?? null;
+  const d = wellness?.day_of ?? null;
   return {
     slot: "tips",
     system: `Write at least 3 actionable training tips as consecutive markdown bullet points with NO blank lines between them. Each tip MUST reference a specific number from the data. Frame weaknesses as improvement opportunities. Format: "- **emoji Title** — specific advice with number." ${TONE}`,
@@ -268,9 +270,37 @@ function tipsRequest(c: any, digest: ActivityDigest, historical: any | null): Ai
       best_vam: c.vam_analysis?.best_vam_climb?.vam,
       torque_avg_nm: c.torque?.avg_torque_nm ?? c.torque?.avg_nm,
       historical_avg_decoupling: historical?.baselines?.find((b: any) => b.days >= 160)?.avg_aerobic_decoupling_pct ?? null,
+      historical_avg_tss_3mo: historical?.baselines?.find((b: any) => b.days >= 85 && b.days <= 95)?.avg_tss ?? null,
+      historical_avg_trimp_3mo: historical?.baselines?.find((b: any) => b.days >= 85 && b.days <= 95)?.avg_trimp ?? null,
+      garmin_sleep_score: n?.sleep_score ?? null,
+      garmin_sleep_duration_h: n?.sleep_duration_h ?? null,
+      garmin_hrv_last_5_min: n?.hrv_last_5_min ?? null,
+      garmin_hrv_vs_baseline: n?.hrv_vs_baseline ?? null,
+      garmin_resting_hr: n?.resting_hr ?? null,
+      garmin_training_readiness: n?.training_readiness_score ?? null,
+      garmin_body_battery_at_start: d?.body_battery_at_start ?? n?.body_battery_start ?? null,
+      garmin_stress_high_pct: n?.stress_high_pct ?? null,
     }),
     maxTokens: 350,
   };
+}
+
+/**
+ * Remove keys where the value is null/undefined in activityObj AND null/undefined in ALL baselines
+ * for the corresponding key (prefixed with "avg_"). Mutates and returns activityObj.
+ */
+function filterNullNull(activityObj: Record<string, any>, baselines: (Record<string, any> | null)[]): Record<string, any> {
+  const validBaselines = baselines.filter((b): b is Record<string, any> => b != null);
+  for (const key of Object.keys(activityObj)) {
+    if (activityObj[key] != null) continue;
+    // Corresponding baseline key strategies: exact match or "avg_" prefix
+    const baselineKeys = [`avg_${key}`, key];
+    const allNull = validBaselines.every(b =>
+      baselineKeys.every(bk => b[bk] == null)
+    );
+    if (allNull) delete activityObj[key];
+  }
+  return activityObj;
 }
 
 function historicalRequest(c: any, digest: ActivityDigest, historical: any): AiRequest {
@@ -287,45 +317,118 @@ function historicalRequest(c: any, digest: ActivityDigest, historical: any): AiR
   const cadenceRange = cadStats?.p5 != null && cadStats?.p95 != null
     ? `${cadStats.p5}-${cadStats.p95} ${c.cadence?.unit ?? "rpm"}` : null;
 
+  // ─── Local fallbacks for power-less activities ───
+  const movingTimeSec: number = c.summary_card?.moving_time_seconds ?? 0;
+  const elapsedTimeSec: number = c.summary_card?.elapsed_time_seconds ?? movingTimeSec;
+  const moveRatio = elapsedTimeSec > 0 ? movingTimeSec / elapsedTimeSec : 1;
+
+  // TSS fallback: TRIMP when no power TSS
+  const trimpRaw: number | null = c.relative_effort?.score ?? null;
+  let tssVal: number | null = c.training_metrics?.tss ?? null;
+  let tss_is_fallback = false;
+  if (tssVal == null && trimpRaw != null) {
+    tssVal = Math.round(trimpRaw);
+    tss_is_fallback = true;
+  }
+
+  // Pace-based VI fallback: 4th-power normalised speed / mean speed
+  let viVal: number | null = c.power?.variability_index ?? null;
+  let vi_is_fallback = false;
+  if (viVal == null && moveRatio > 0.9) {
+    const windows: any[] = Array.isArray(c.five_minute_windows) ? c.five_minute_windows : [];
+    const speeds = windows.map((w: any) => w.avg_speed_kmh).filter((s: any) => typeof s === "number" && s > 0);
+    if (speeds.length >= 3) {
+      const mean = speeds.reduce((a: number, b: number) => a + b, 0) / speeds.length;
+      const np4 = Math.pow(speeds.reduce((a: number, b: number) => a + Math.pow(b, 4), 0) / speeds.length, 0.25);
+      if (mean > 0) {
+        viVal = Math.round((np4 / mean) * 100) / 100;
+        vi_is_fallback = true;
+      }
+    }
+  }
+
+  // Aerobic decoupling fallback: cardiac drift %
+  let decouplingVal: number | null = c.aerobic_decoupling?.decoupling_pct ?? null;
+  let decoupling_is_fallback = false;
+  if (decouplingVal == null) {
+    const driftPct: number | null = c.heart_rate?.cardiac_drift?.drift_pct ?? null;
+    if (driftPct != null) {
+      decouplingVal = driftPct;
+      decoupling_is_fallback = true;
+    }
+  }
+
+  // EF fallback: pace_sec_per_km / avg_hr (pace-based, inverse scale — lower = better for running)
+  let efVal: number | null = c.training_metrics?.efficiency_factor ?? null;
+  let ef_is_pace_based = false;
+  if (efVal == null) {
+    const avgHr: number | null = c.heart_rate?.stats?.avg ?? null;
+    const speedStr: string | undefined = c.summary_card?.avg_speed;
+    let paceSec: number | null = null;
+    if (speedStr?.includes("/km")) {
+      const m = speedStr.match(/(\d+):(\d+)\/km/);
+      if (m) paceSec = parseInt(m[1]) * 60 + parseInt(m[2]);
+    }
+    if (paceSec != null && avgHr != null && avgHr > 0) {
+      efVal = Math.round((paceSec / avgHr) * 1000) / 1000;
+      ef_is_pace_based = true;
+    }
+  }
+
+  // Build this_activity — flags sit alongside their values
+  const thisActivity: Record<string, any> = {
+    avg_hr: digest.avgHR,
+    avg_power: digest.avgPower,
+    np: digest.np,
+    tss: tssVal,
+    ...(tss_is_fallback && { tss_is_fallback: true }),
+    ef: efVal,
+    ...(ef_is_pace_based && { ef_is_pace_based: true, ef_unit: "s/km/bpm (pace÷HR, lower=better)" }),
+    cadence: c.cadence?.stats?.avg,
+    cadence_range_p5_p95: cadenceRange,
+    z2_pct: c.training_zones?.hr_zones?.zones?.find((z: any) => z.zone?.includes("Z2"))?.pct,
+    vi: viVal,
+    ...(vi_is_fallback && { vi_is_fallback: true }),
+    drift_bpm: digest.drift,
+    decoupling_pct: decouplingVal,
+    ...(decoupling_is_fallback && { decoupling_is_fallback: true }),
+    vo2max: c.vo2max?.value,
+    trimp: trimpRaw,
+    best_20min_power_w: best20minW,
+  };
+
+  const primaryBaseline = primary ? {
+    period: primary.period_label,
+    avg_hr: primary.avg_hr ?? primary.avg_hr_bpm,
+    avg_np: primary.avg_normalized_power_w,
+    avg_tss: primary.avg_tss,
+    avg_cadence: primary.avg_cadence,
+    avg_vi: primary.avg_variability_index ?? primary.avg_vi,
+    avg_drift: primary.avg_cardiac_drift_bpm,
+    avg_trimp: primary.avg_trimp,
+    avg_best_20min_power_w: primary.avg_best_20min_power_w ?? primary.best_20min_power_w,
+    activity_count: primary.activity_count,
+  } : null;
+
+  const slowBaseline = slow ? {
+    period: slow.period_label,
+    avg_ef: slow.avg_efficiency_factor,
+    ...(slow.ef_is_pace_based && { avg_ef_is_pace_based: true, avg_ef_unit: "s/km/bpm (pace÷HR, lower=better)" }),
+    avg_z2_pct: slow.avg_z2_pct,
+    avg_decoupling: slow.avg_aerobic_decoupling_pct,
+    avg_vo2max: slow.avg_vo2max,
+  } : null;
+
+  // Strip metrics where both activity and ALL baselines are null — reduce AI noise
+  filterNullNull(thisActivity, [primaryBaseline, slowBaseline]);
+
   return {
     slot: "historical_comparison",
-    system: `Write structured bullet comparison. Format per metric: "- emoji **Label:** X unit vs. N-month avg Y unit → short explanation with context label emoji". After the → add 3-8 words of context (e.g. "higher = stronger effort ⬆️", "less Z2 = more intensity in this ride 🟡", "<3% = excellent base fitness 🟢", "rising = aerobic fitness improving 🟢"). Use ONLY these emojis for context labels: ⬆️ (higher/above avg), ⬇️ (lower/below avg), 🟢 (good/optimal), 🟡 (neutral/in range), 🔴 (concern/warning). Include units (bpm, W, rpm, %, etc). Include ALL of these metrics in order: HR, power, NP, cadence (show avg + range p5-p95 if provided), TSS, Load (TRIMP), VI, cardiac drift, EF, Z2%, decoupling, VO2max, best 20min power. Use 3mo baseline for HR/power/NP/cadence/TSS/VI/drift/TRIMP/best20min. Use 6mo baseline for EF/Z2%/decoupling/VO2max. Last bullet MUST be: "- 📈 **Trend:** Improving/Stable/Declining — 2-3 sentences explaining direction based on NP, EF, decoupling, TSS vs baseline and any PRs". Skip metrics where both this activity and baseline are null. ${TONE}`,
+    system: `Write structured bullet comparison. Format per metric: "- emoji **Label:** X unit vs. N-month avg Y unit → short explanation with context label emoji". After the → add 3-8 words of context (e.g. "higher = stronger effort ⬆️", "less Z2 = more intensity in this ride ", "<3% = excellent base fitness ", "rising = aerobic fitness improving "). Use ONLY these emojis for context labels: ⬆️ (higher/above avg), ⬇️ (lower/below avg),  (good/optimal),  (neutral/in range),  (concern/warning). Include units (bpm, W, rpm, %, etc). Use 3mo baseline for HR/power/NP/cadence/TSS/VI/drift/TRIMP/best20min. Use 6mo baseline for EF/Z2%/decoupling/VO2max. For EF: if ef_is_pace_based=true, label it "EF (pace/HR)". If avg_ef_is_pace_based=true in slow_baseline, both values use the same s/km/bpm unit — compare them normally (lower = better). If avg_ef is null or absent from slow_baseline, write "(no prior baseline)" instead of "vs. N/A" and note the value establishes a new baseline. Mark fallback values (tss_is_fallback, vi_is_fallback, decoupling_is_fallback) with †. Last bullet MUST be: "-  **Trend:** Improving/Stable/Declining — 2-3 sentences explaining direction based on available metrics vs baseline and any PRs". ONLY output bullet points for metric keys present in the JSON payload. If a metric key is absent from this_activity, do NOT mention it. ${TONE}`,
     user: JSON.stringify({
-      this_activity: {
-        avg_hr: digest.avgHR,
-        avg_power: digest.avgPower,
-        np: digest.np,
-        tss: digest.tss,
-        ef: c.training_metrics?.efficiency_factor,
-        cadence: c.cadence?.stats?.avg,
-        cadence_range_p5_p95: cadenceRange,
-        z2_pct: c.training_zones?.hr_zones?.zones?.find((z: any) => z.zone?.includes("Z2"))?.pct,
-        vi: c.power?.variability_index,
-        drift_bpm: digest.drift,
-        decoupling_pct: digest.decoupling,
-        vo2max: c.vo2max?.value,
-        trimp: c.relative_effort?.score,
-        best_20min_power_w: best20minW,
-      },
-      primary_baseline: primary ? {
-        period: primary.period_label,
-        avg_hr: primary.avg_hr ?? primary.avg_hr_bpm,
-        avg_np: primary.avg_normalized_power_w,
-        avg_tss: primary.avg_tss,
-        avg_cadence: primary.avg_cadence,
-        avg_vi: primary.avg_variability_index ?? primary.avg_vi,
-        avg_drift: primary.avg_cardiac_drift_bpm,
-        avg_trimp: primary.avg_trimp,
-        avg_best_20min_power_w: primary.avg_best_20min_power_w ?? primary.best_20min_power_w,
-        activity_count: primary.activity_count,
-      } : null,
-      slow_baseline: slow ? {
-        period: slow.period_label,
-        avg_ef: slow.avg_efficiency_factor,
-        avg_z2_pct: slow.avg_z2_pct,
-        avg_decoupling: slow.avg_aerobic_decoupling_pct,
-        avg_vo2max: slow.avg_vo2max,
-      } : null,
+      this_activity: thisActivity,
+      primary_baseline: primaryBaseline,
+      slow_baseline: slowBaseline,
     }),
     maxTokens: 800,
   };
@@ -395,7 +498,7 @@ export function buildInterpretationRequests(
   if (has("cadence_zones_insight"))     requests.push(withFewShot(cadenceZonesRequest(c)));
   if (has("vam_interpretation"))        requests.push(withFewShot(vamRequest(c)));
   if (has("torque_interpretation"))     requests.push(withFewShot(torqueRequest(c)));
-  if (has("tips"))                      requests.push(withFewShot(tipsRequest(c, digest, historical)));
+  if (has("tips"))                      requests.push(withFewShot(tipsRequest(c, digest, historical, wellness)));
   if (has("historical_comparison") && historical) requests.push(withFewShot(historicalRequest(c, digest, historical)));
   if (has("readiness_verdict") && wellness)       requests.push(withFewShot(readinessRequest(wellness, digest, c)));
 

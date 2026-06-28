@@ -187,7 +187,38 @@ If absent (no targets configured), skip this section entirely.
 
 ---
 
-### 9. 💡 Coaching Recommendations (4-6 bullets)
+### 9. 🎯 Training Recommendations (if `training_recommendations` is present)
+
+```
+## 🎯 TRAINING RECOMMENDATIONS
+
+| Signal | Value | Guidance |
+|--------|-------|----------|
+| CTL | X.X | ... |
+| ATL | X.X | ... |
+| TSB | X.X | ... |
+| Readiness | XX / label | ... |
+| HRV trend | improving / stable / declining | ... |
+| Sleep | XX/100 | ... |
+| Body Battery | XX/100 | ... |
+| Goal date | YYYY-MM-DD | ... |
+| Goal mode | build_fitness / maintain / fat_loss / race_prep | ... |
+| Recovery ETA | X h | ... |
+| State | fresh / balanced / cautious / fatigued | ... |
+| Session | rest / recovery / endurance / tempo / quality | ... |
+| Confidence | low / medium / high | ... |
+```
+
+- Use this section to convert the precomputed recommendation object into concise coaching guidance
+- Prioritize recovery when TSB is strongly negative, readiness is low, HRV is declining, or Body Battery / sleep are suppressed
+- If `goal_event_date` is present, tie the next 1-2 weeks of guidance to that event and mention whether the current load is building toward it or too aggressive
+- If `cause_codes`, `confidence_factors`, `suggested_weekly_microcycle`, or `recovery_eta_hours` are present, use them to explain *why* the recommendation is what it is, but keep the output concise
+- If `recommendation_history` is present in the payload, summarize state stability/trend in one short sentence when it helps explain consistency or change
+- If `training_recommendations` is absent, skip this section entirely
+
+---
+
+### 10. 💡 Coaching Recommendations (4-6 bullets)
 
 End with specific, actionable advice. Each point must reference actual numbers from the data.
 
@@ -211,4 +242,5 @@ Format:
 6. **Skip null sections** — if race_predictions or training_plan_adherence are absent, skip those sections entirely
 7. **Use tables** for any multi-week or multi-sport comparison — never write "week X was X km, week Y was Y km" in prose
 8. **Z2 80/20 rule** — for endurance sports, 80% easy (Z1-Z2) / 20% hard (Z3-Z5) is the gold standard. Flag significant deviations.
+9. **Goal-date awareness** — if `goal_event_date` is set, align recommendations and plan suggestions to that date; otherwise keep the guidance cycle-based
 

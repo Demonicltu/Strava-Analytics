@@ -101,6 +101,48 @@ describe("buildDescription — Surf", () => {
   });
 });
 
+describe("buildDescription — Paddle", () => {
+  const paddleCrunched = {
+    summary_card: {
+      type: "StandUpPaddling",
+      name: "Lake Session",
+      date: "Sat",
+      distance: "7.2 km",
+      moving_time: "2h 12m",
+      elapsed_time: "3h 04m",
+      moving_time_seconds: 7927,
+      avg_speed: "3.3 km/h",
+      avg_hr: "95 bpm",
+      cadence: "51 spm",
+    },
+    paddle_analysis: {
+      avg_stroke_rate_spm: 51.4,
+      max_stroke_rate_spm: 79,
+      estimated_total_strokes: 6704,
+      distance_per_stroke_m: 1.08,
+      pace_sec_per_km: 1090.9,
+    },
+    relative_effort: { score: 7, interpretation: "Easy" },
+  };
+
+  it("uses PADDLE SESSION header", () => {
+    const out = buildDescription(paddleCrunched, null);
+    expect(out).toContain("📊 PADDLE SESSION");
+  });
+
+  it("uses stroke rate wording in summary card", () => {
+    const out = buildDescription(paddleCrunched, null);
+    expect(out).toContain("Stroke Rate");
+  });
+
+  it("shows paddle metrics block", () => {
+    const out = buildDescription(paddleCrunched, null);
+    expect(out).toContain("PADDLE METRICS");
+    expect(out).toContain("Estimated Strokes");
+    expect(out).toContain("Distance/Stroke");
+  });
+});
+
 // ─── Raw training zones fallback (no AI text) ───
 
 describe("buildDescription — raw training zones fallback", () => {
@@ -259,6 +301,18 @@ describe("buildDescription — no-AI segment highlights", () => {
     expect(out).toContain("🏅 TOP SEGMENTS");
     expect(out).toContain("Big Hill Climb");
     expect(out).toContain("🥇 PR #1");
+  });
+});
+
+describe("buildDescription — route difficulty", () => {
+  it("shows route difficulty score when available", () => {
+    const crunched = {
+      summary_card: { type: "Ride", name: "Ride", moving_time_seconds: 3600 },
+      route_difficulty: { score: 63, label: "Hard", components: { ascent_density_m_per_km: 12.3 } },
+    };
+    const out = buildDescription(crunched, null);
+    expect(out).toContain("ROUTE DIFFICULTY");
+    expect(out).toContain("63/100");
   });
 });
 

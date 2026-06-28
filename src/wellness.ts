@@ -162,8 +162,12 @@ export function loadWellnessContext(
   activityStartIso?: string | null,  // ISO datetime for intraday body battery lookup (e.g. start_date_local)
   utcOffsetHours?: number,           // Local UTC offset in hours (e.g. 3 for EEST) — fixes Strava Z-suffix timezone mismatch
 ): WellnessContext | null {
-  const wellnessPath = join(analysisDir, "garmin_wellness.json");
-  if (!existsSync(wellnessPath)) return null;
+  // Support both Garmin and Samsung wellness files (Garmin takes priority)
+  const garminPath = join(analysisDir, "garmin_wellness.json");
+  const samsungPath = join(analysisDir, "samsung_wellness.json");
+  const wellnessPath = existsSync(garminPath) ? garminPath
+    : existsSync(samsungPath) ? samsungPath : null;
+  if (!wellnessPath) return null;
 
   let wellness: Record<string, any>;
   try {

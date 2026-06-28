@@ -165,6 +165,60 @@ Typical recreational surfers spend **95-98% paddling** and **2-5% riding waves**
 
 ---
 
+## 🛶 Paddle Metrics (StandUpPaddling / SUP)
+
+Dedicated SUP/paddle analysis focused on stroke efficiency and pacing.
+
+### Stroke Rate
+
+From cadence stream, interpreted as strokes per minute (spm):
+- `avg_stroke_rate_spm`
+- `max_stroke_rate_spm`
+- `stroke_rate_variability_pct` (lower = steadier rhythm)
+
+### Estimated Total Strokes
+
+Integrated over stream time:
+
+`estimated_total_strokes ≈ Σ(stroke_rate_spm / 60 * dt_sec)`
+
+This is an estimate and depends on cadence stream quality/sampling.
+
+### Distance per Stroke
+
+`distance_per_stroke_m = moving_distance_m / estimated_total_strokes`
+
+Higher values typically indicate better glide/efficiency for similar water conditions.
+
+### Paddle Pace
+
+`pace_sec_per_km = 3600 / avg_speed_kmh`
+
+Useful alongside speed when comparing sessions with different wind/current conditions.
+
+### Paddle Zones
+
+#### Speed Zones (paddling model)
+
+| Zone | Speed Range |
+|------|------------|
+| Z1 Recovery Glide | 0–3 km/h |
+| Z2 Easy Endurance | 3–5 km/h |
+| Z3 Steady Paddle | 5–6.5 km/h |
+| Z4 Strong Effort | 6.5–8 km/h |
+| Z5 Sprint / Surf Assist | 8+ km/h |
+
+#### Stroke Rate Zones
+
+| Zone | Stroke Rate |
+|------|-------------|
+| Z1 Easy | <35 spm |
+| Z2 Steady | 35–50 spm |
+| Z3 Strong | 50–65 spm |
+| Z4 High Turnover | 65+ spm |
+
+---
+
 ## ⚙️ Intensity Factor (IF)
 
 `IF = Normalized Power / FTP` — how hard was this ride relative to your threshold.
@@ -196,6 +250,80 @@ How much training load this ride added. Higher = more recovery needed.
 
 *Requires: power meter + `RIDER_FTP_W` in .env (or `RUNNER_RFTP_W` for running)*
 
+**Fallback — TSS†:** When no power-based TSS is available, TRIMP (relative effort score) is used as a direct substitute. The value is marked with `†` in output. Directional indicator only — useful for trend comparison but not comparable to power-based TSS.
+
+**Availability rule:** TSS is shown as a true power-derived score only when power + FTP are available. Otherwise the UI and description should treat the number as HR/TRIMP-based load, not the same thing as power TSS.
+
+### Heat-adjusted TSS
+
+When average activity temperature exceeds **25°C**, heat-adjusted TSS is computed:
+
+`tss_heat_adjusted = tss * (1 + 0.05 * (avg_temp_c - 25))`
+
+- Multiplier is capped at **+35%** to avoid runaway corrections.
+- `tss` remains the base value; `tss_heat_adjusted` is an additional heat-strain estimate.
+
+### TSS per hour (TSS/h)
+
+`TSS/h = TSS / moving_hours`
+
+- Helps compare load density between short hard sessions and longer endurance rides.
+- Shown in description only when power-based TSS is available.
+
+### TSS vs 3-month baseline
+
+Compares current activity TSS against your 90-day baseline average TSS:
+
+`delta_pct = (current_tss / baseline_avg_tss - 1) * 100`
+
+- Positive % = above your typical load.
+- Negative % = below your typical load.
+- Uses 3-month baseline when available (falls back to last available baseline period).
+
+---
+
+## ⚖️ CTL / ATL / TSB (Fitness / Fatigue / Form)
+
+Banister impulse-response model computed from daily load (TSS preferred, TRIMP fallback):
+
+- **CTL** (Chronic Training Load): 42-day EWMA (fitness)
+- **ATL** (Acute Training Load): 7-day EWMA (fatigue)
+- **TSB** (Training Stress Balance): `CTL - ATL` (form)
+- **ACWR** (context): `ATL / CTL`
+
+Interpretation guide:
+
+| Metric | Typical interpretation |
+|--------|------------------------|
+| TSB > +10 | Fresh / possibly underloaded |
+| TSB -10 to +10 | Productive training zone |
+| TSB < -10 | Fatigued / recovery likely needed |
+| ACWR 0.8-1.3 | Typical safe loading range |
+| ACWR 1.3-1.5 | Watch zone |
+| ACWR > 1.5 | Elevated risk |
+
+> The recommendation system reuses these load values but adds explainability fields (cause codes, confidence breakdown, recovery ETA, and weekly microcycle) in the report/dashboard; those are presentation features, not new load metrics.
+
+---
+
+## 🧭 Route Difficulty
+
+Terrain-normalized route difficulty score (0-100) derived from ascent + gradient distribution.
+
+Weighted components:
+- **40%** ascent density (m/km)
+- **35%** steep uphill exposure
+- **25%** total uphill exposure
+
+| Score | Label |
+|-------|-------|
+| <25 | Easy |
+| 25-49 | Moderate |
+| 50-74 | Hard |
+| 75+ | Very Hard |
+
+Useful for comparing effort quality across routes with different terrain.
+
 ---
 
 ## ⚙️ Efficiency Factor (EF)
@@ -210,6 +338,8 @@ How much training load this ride added. Higher = more recovery needed.
 | >2.0 | Excellent (strong power, controlled HR) |
 
 *Requires: power meter + HR*
+
+**Fallback — EF (pace/HR):** When no power meter is present, a pace-based proxy is computed as `pace_sec_per_km / avg_HR` (unit: s/km/bpm). **Lower = better** for running (faster pace at lower HR). This is labelled "EF (pace/HR)" in output to distinguish it from power-based EF and cannot be compared directly against the watt-based EF scale above.
 
 ---
 
@@ -307,6 +437,8 @@ Power-to-HR ratio drift between first and second half. Key aerobic fitness marke
 
 *Requires: power meter + HR*
 
+**Fallback — Decoupling† (drift-based):** When no power meter is present, cardiac drift % (`drift_pct` from the Friel method) is used as a decoupling proxy. Marked with `†`. Directional indicator — elevated drift % still signals cardiovascular decoupling even without power data.
+
 ---
 
 ## ❤️ Cardiac Drift
@@ -356,6 +488,8 @@ Speed comparison between first and second half of the ride/run.
 | 1.05–1.15 | Normal outdoor ride |
 | 1.15–1.25 | Moderately variable (group ride, rolling terrain) |
 | >1.25 | Very spiky (crits, interval training, stop-and-go) |
+
+**Fallback — VI† (pace-based):** When no power meter is present, VI is estimated using 4th-power normalised speed divided by mean speed across 5-minute windows (same formula as NP but applied to speed). Marked with `†`. Valid as a pacing-consistency indicator — not directly comparable to power-based VI.
 
 ---
 

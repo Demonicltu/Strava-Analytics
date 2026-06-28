@@ -330,6 +330,8 @@ npm run analyze
 
 - Pick a crunched file
 - AI writes a full performance report: summary, verdict, detailed breakdowns, tips
+- Report includes a deterministic training recommendation block (state/session, 24h/72h guidance, TSS targets, optional recovery ETA, 7-day microcycle)
+- Explainability includes top drivers with friendly labels (stable internal codes shown secondarily), confidence breakdown, and signal/rationale context
 - Requires an AI API key in `.env`
 
 **Step 4: Push to Strava**

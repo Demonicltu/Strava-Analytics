@@ -141,8 +141,44 @@ describe("crunchActivity — Ride (extended)", () => {
     expect(result.training_metrics).toBeDefined();
   });
 
+  it("adds heat-adjusted TSS when average temperature is above 25C", () => {
+    const result = crunchActivity(
+      makeActivity("Ride", 180, { average_watts: 220, device_watts: true, weighted_average_watts: 230 }, () => ({
+        power_watts: 220,
+        temperature_c: 30,
+      })),
+      RIDER,
+    );
+    expect(result.training_metrics?.tss).toBeTypeOf("number");
+    expect(result.training_metrics?.tss_heat_adjusted).toBeTypeOf("number");
+    expect(result.training_metrics?.tss_heat_adjusted).toBeGreaterThan(result.training_metrics?.tss);
+  });
+
   it("handles missing rider config gracefully (null FTP/maxHr)", () => {
     expect(() => crunchActivity(makeActivity("Ride", 150), RIDER_MINIMAL)).not.toThrow();
+  });
+
+  it("computes route difficulty for outdoor non-workout sessions", () => {
+    const result = crunchActivity(
+      makeActivity("Ride", 220, { total_elevation_gain_m: 550, distance_km: 28 }, (i) => ({
+        grade_percent: i % 5 === 0 ? 9 : i % 3 === 0 ? 5 : 1,
+      })),
+      RIDER,
+    );
+    expect(result.route_difficulty).toBeDefined();
+    expect(result.route_difficulty.score).toBeTypeOf("number");
+    expect(result.route_difficulty.label).toBeTypeOf("string");
+  });
+
+  it("includes 60min and 90min best power efforts for long rides", () => {
+    const long = makeActivity("Ride", 6000, { average_watts: 210, device_watts: true, weighted_average_watts: 215 }, () => ({
+      power_watts: 210,
+      speed_kmh: 28,
+    }));
+    long.activity_summary.moving_time_seconds = 6000;
+    const result = crunchActivity(long, RIDER);
+    expect(result.power?.best_efforts?.["60min"]).toBeDefined();
+    expect(result.power?.best_efforts?.["90min"]).toBeDefined();
   });
 });
 
@@ -319,6 +355,44 @@ describe("crunchActivity — Workout", () => {
     const result = crunchActivity(workoutRaw, RIDER);
     // intervals_detected may or may not find intervals depending on threshold logic
     expect(typeof result.workout_analysis?.intervals_detected).toBe("number");
+  });
+});
+
+describe("crunchActivity — Paddle", () => {
+  it("builds paddle_analysis for StandUpPaddling when cadence exists", () => {
+    const raw = makeActivity("StandUpPaddling", 180, {
+      average_speed_kmh: 3.4,
+      average_cadence: 52,
+      distance_km: 7.2,
+    }, (i) => ({
+      speed_kmh: 3 + (i % 10) * 0.1,
+      cadence_rpm: 50 + (i % 5),
+      power_watts: null,
+    }));
+    const result = crunchActivity(raw, RIDER);
+    expect(result.summary_card?.type).toBe("StandUpPaddling");
+    expect(result.paddle_analysis).toBeDefined();
+    expect(result.paddle_analysis.avg_stroke_rate_spm).toBeTypeOf("number");
+    expect(result.paddle_analysis.estimated_total_strokes).toBeTypeOf("number");
+    expect(result.paddle_analysis.distance_per_stroke_m).toBeTypeOf("number");
+    expect(result.training_zones?.speed_zones?.zone_model).toBe("paddling");
+  });
+
+  it("keeps pace/speed paddle_analysis when cadence is missing", () => {
+    const raw = makeActivity("StandUpPaddling", 160, {
+      average_speed_kmh: 3.1,
+      average_cadence: null,
+      distance_km: 6.0,
+    }, () => ({
+      speed_kmh: 3.1,
+      cadence_rpm: null,
+      power_watts: null,
+    }));
+    const result = crunchActivity(raw, RIDER);
+    expect(result.paddle_analysis).toBeDefined();
+    expect(result.paddle_analysis.pace_sec_per_km).toBeTypeOf("number");
+    expect(result.paddle_analysis.avg_stroke_rate_spm ?? null).toBeNull();
+    expect(result.paddle_analysis.estimated_total_strokes ?? null).toBeNull();
   });
 });
 

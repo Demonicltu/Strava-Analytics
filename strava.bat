@@ -8,4 +8,3 @@ echo.
 node "%~dp0dist\strava.cjs"
 echo.
 pause
-

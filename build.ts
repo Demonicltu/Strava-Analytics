@@ -21,7 +21,7 @@ function loadEmbeddedInstructions(): Record<string, string> {
     if (existsSync(legacy)) result["__legacy__"] = readFileSync(legacy, "utf-8");
     return result;
   }
-  // Load top-level .md files (common, cycling, running, walk, surf, workout)
+  // Load top-level .md files (common, cycling, running, walk, surf, paddle, workout)
   for (const f of readdirSync(instrDir)) {
     if (f.endsWith(".md")) {
       const key = f.replace(".md", "").toLowerCase();
@@ -153,7 +153,7 @@ async function main() {
       copyFileSync(join(srcAnalysis, f), join(releaseAnalysis, f));
     }
     // Also copy garmin_wellness.json and personal_records.json if present
-    for (const extra of ["garmin_wellness.json", "personal_records.json"]) {
+    for (const extra of ["garmin_wellness.json", "samsung_wellness.json", "personal_records.json"]) {
       if (existsSync(join(srcAnalysis, extra))) {
         copyFileSync(join(srcAnalysis, extra), join(releaseAnalysis, extra));
       }

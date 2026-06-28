@@ -52,6 +52,12 @@ GEMINI_API_KEY=your_gemini_key
 # GARMIN_PASSWORD=yourpassword
 # GARMIN_SINCE=2025-11-11  # Your watch start date — skips fetching earlier empty days
 
+# Training goal (optional — used by digest recommendations / plan suggestions)
+# GOAL_EVENT_DATE=2026-09-12  # Goal race/event date in YYYY-MM-DD format
+
+# Samsung Health (optional — alternative to Garmin for readiness context)
+# SAMSUNG_EXPORT_DIR=./samsung_export  # Path to unzipped Samsung Health export
+
 # Training targets (optional — enables adherence tracking in digest + dashboard)
 # WEEKLY_TARGET_KM=60
 # WEEKLY_TARGET_HOURS=6
@@ -160,6 +166,7 @@ npm run analyze
 - Automatically loads **historical context** (1w/1mo/3mo/6mo baselines for the same sport) from existing crunched files — no extra API calls
 - Automatically loads **Garmin wellness** for that day (HRV, sleep, Body Battery, training status, acute load, stress) if `garmin_wellness.json` exists
 - **Renders a deterministic markdown skeleton** from the crunched JSON (`template.ts`) — all tables, headers, numbers, zones, VAM table, torque section, segments are generated in TypeScript; structure is guaranteed to be correct regardless of AI model
+- Adds a deterministic **Training Recommendation** block in the activity report (state/session/TSS targets) derived from CTL/ATL/TSB + Garmin 7d/28d trends when available
 - **Fires ~15 sequential micro AI calls** (`interpret.ts`) — one per interpretation slot (verdict, pacing, cardiac drift, power, tips, historical comparison, etc.) — each call is ~100–400 tokens; sequential execution avoids 429 rate-limit errors; concurrency controlled by `AI_CONCURRENCY` in `ai_client.ts` (default: 1)
 - **Few-shot examples** per slot loaded from `instructions/examples/{slot}.md` — appended to each AI request to anchor output tone and format; edit any file to tune without touching code
 - **Output validation** — each slot response is checked against rules (length, numbers, banned phrases, bullet format, emoji) and warnings are logged; pipeline never blocks on validation
@@ -182,13 +189,15 @@ npm run update
 **What it does:**
 - Lists available crunched files
 - You pick one
-- Builds **description** (public): Category Score (🎯/👤/🏆 three-tier) + Ride Summary + Advanced Metrics (IF/TSS/W/kg) + Full AI Analysis
+- Builds **description** (public): Category Score (🎯/👤/🏆 three-tier) + Ride Summary + Advanced Metrics (IF/TSS/W/kg, TSS/h, TSS vs 3-month baseline) + Full AI Analysis
 - Builds **private notes** (mobile-friendly): Short actionable tips + key stats
 - Previews both in terminal
 - You choose: both / description only / notes only / cancel
 - Pushes to Strava via API
 
 **Requires:** `activity:write` scope in your refresh token (see Setup step 3)
+
+> Note: `TSS`, `TSS/h`, and `TSS vs baseline` appear only when power-based TSS is available (power meter + FTP).
 
 ---
 
@@ -212,19 +221,22 @@ strava-extractor/
 ├── .env                          # Your credentials + rider profile + Garmin credentials
 ├── .env.example                  # Template
 ├── .garmin_session.json          # Cached Garmin session token (auto-created, gitignored)
-├── AI_COMPARE_INSTRUCTIONS.md    # Instructions for trend/comparison AI analysis
-├── AI_DIGEST_INSTRUCTIONS.md     # Instructions for weekly/monthly digest AI report
+│   ├── AI_COMPARE_INSTRUCTIONS.md    # Instructions for trend/comparison AI analysis
+│   ├── AI_DIGEST_INSTRUCTIONS.md     # Instructions for weekly/monthly digest AI report
+│   ├── AI_SAMSUNG_WELLNESS.md        # Samsung-specific AI interpretation rules
 ├── instructions/                 # Per-activity-type AI analysis instructions (split for token efficiency)
 │   ├── common.md                     # Shared rules (output format, zones, weather, history, Garmin)
 │   ├── cycling.md                    # Cycling-specific (amateur score, power, VAM, torque, cadence)
 │   ├── running.md                    # Running-specific (runner score, pace, best efforts, power/torque/gradient/VAM if power meter)
 │   ├── walk.md                       # Walk/hike (minimal, casual tone)
 │   ├── surf.md                       # Surfing (wave report, paddle/ride ratio)
+│   ├── paddle.md                     # Paddle/SUP (stroke rate, pacing, efficiency)
 │   ├── workout.md                    # Gym/HIIT (WIS score, interval detection, HR recovery)
 │   ├── examples/                     # Few-shot examples per AI slot (loaded automatically)
 │   └── devices/
 │       └── garmin.md                 # Garmin-specific (Training Effect, Body Battery, HRV quirks)
 ├── garmin_sync.py                # Garmin Connect wellness sync script
+├── samsung_sync.py               # Samsung Health export parser script
 ├── requirements.txt              # Python dependencies (garminconnect)
 ├── dashboard.html                # Generated static dashboard (open in browser)
 ├── output/                       # Raw activity JSONs from Strava
@@ -236,6 +248,7 @@ strava-extractor/
 │   ├── digest_<weeks>w_<date>.md     # AI-written weekly digest
 │   ├── personal_records.json         # All-time personal records database
 │   └── garmin_wellness.json          # Garmin daily wellness database
+│   └── samsung_wellness.json        # Samsung Health daily wellness database (alternative)
 └── src/
     ├── index.ts          # npm start
     ├── pre_analyze.ts    # npm run crunch
@@ -256,7 +269,8 @@ strava-extractor/
 │   ├── crunch.ts         # Shared: all metric computations
 │   ├── instructions.ts   # Shared: compose per-activity-type AI instructions
     ├── summary_utils.ts  # Shared: compact activity summaries + historical context + PR check
-    ├── wellness.ts       # Shared: Garmin wellness context reader
+    ├── wellness.ts       # Shared: Garmin/Samsung wellness context reader
+    ├── activity_recommendation.ts # Shared: deterministic activity recommendations (load + wellness trends)
     ├── activities.ts     # Paginated activity list fetching
     ├── weather.ts        # Open-Meteo weather fetch (multi-point, per hour)
     ├── format.ts         # Shared: description & notes formatting
@@ -349,7 +363,7 @@ python garmin_sync.py --days 30                  # sync last 30 days only
 | Sleep score + stages (deep/REM/light/awake) | Sleep tracking | Recovery quality |
 | HRV last night + 7-day avg + status | HRV nightly | Readiness, fatigue detection |
 | Resting HR | Heart rate | Overtraining signal |
-| Body Battery (start/end/peak/low) | Composite | Pre-workout readiness |
+| Body Battery (start=end of sleep wake-up level, end/peak/low) | Composite | Pre-workout readiness |
 | Training Readiness score (0–100) | Garmin composite | Go/no-go signal |
 | Training Status (PRODUCTIVE/MAINTAINING/RECOVERY/OVERREACHING…) | Garmin | Load context |
 | Acute load (7-day) + Chronic load (4-week) + Load ratio | Training load | Overreaching risk detection |
@@ -367,6 +381,102 @@ python garmin_sync.py --days 30                  # sync last 30 days only
 - Example: "Your HRV was 8 ms below your 7-day average and training status was OVERREACHING — this explains why HR was 6 bpm higher than your 30-day average at the same pace"
 
 **Note:** Session token is cached in `.garmin_session.json` — re-login is automatic when it expires. On first login, Garmin will send a one-time code to your email — enter it in the terminal when prompted.
+
+---
+
+## Samsung Health wellness sync (alternative to Garmin)
+
+Parses exported Samsung Health data (sleep, HR, stress, SpO2, steps, HRV) into the same wellness format used by Garmin — **no API needed, works offline**.
+
+### Step-by-step export guide (do this on your phone)
+
+1. **Open Samsung Health** app on your Galaxy phone
+2. Tap **⋮** (three dots menu) in the top-right corner
+3. Tap **Settings**
+4. Scroll down to **Download personal data**
+5. Tap **Request download** → confirm
+6. **Wait** — Samsung prepares the export (takes 1–24 hours depending on data size)
+7. You'll receive a **notification** (and email) when it's ready
+8. Go back to Settings → Download personal data → **Download** the zip file
+9. **Transfer the zip** to your PC (USB cable, cloud drive, email — whatever works)
+10. **Unzip** the file into `strava-extractor/samsung_export/`
+
+After unzipping, the folder structure should look like:
+```
+strava-extractor/
+├── samsung_export/
+│   ├── com.samsung.health.sleep.202506010000.csv
+│   ├── com.samsung.health.sleep_stage.202506010000.csv
+│   ├── com.samsung.health.heart_rate.202506010000.csv
+│   ├── com.samsung.health.stress.202506010000.csv
+│   ├── com.samsung.health.oxygen_saturation.202506010000.csv
+│   ├── com.samsung.health.step_count.202506010000.csv
+│   ├── com.samsung.health.floors_climbed.202506010000.csv
+│   ├── com.samsung.health.heart_rate_variability.202506010000.csv  ← Galaxy Watch 4+ only
+│   └── ... (other files — ignored by the parser)
+```
+
+> **Note:** The exact filenames include timestamps and may vary. The parser finds files by prefix (`com.samsung.health.sleep*`, etc.) so any naming is fine. Subdirectories are also searched recursively.
+
+### Setup
+
+Add to your `.env` (optional — defaults to `./samsung_export`):
+
+```env
+SAMSUNG_EXPORT_DIR=./samsung_export
+```
+
+### Usage
+
+```bash
+npm run samsung                                   # parse export (incremental)
+python samsung_sync.py --dir /path/to/export      # custom export location
+python samsung_sync.py --force                    # re-parse everything
+```
+
+### How often to re-export?
+
+- **Weekly** (recommended): before running `npm run digest` for your Sunday review
+- **Before analyzing a specific activity**: if you want readiness context for that day
+- The export always includes ALL historical data, so each new export fully replaces the previous one
+- The parser is incremental — it only updates days that have new/changed data
+
+### Troubleshooting
+
+| Problem | Solution |
+|---------|----------|
+| "Export directory not found" | Check the path in `SAMSUNG_EXPORT_DIR` or pass `--dir` |
+| "No sleep CSV found" | Make sure you unzipped the export (not just copied the .zip) |
+| Missing HRV data | HRV requires Galaxy Watch 4 or newer — older watches don't record it |
+| Sleep score seems off | The score is synthesized from stages; Samsung's own score appears if your export includes it |
+| Stale data | Re-export from Samsung Health — each export includes full history |
+
+**What it parses:**
+
+| Metric | Source CSV | Used for |
+|--------|-----------|----------|
+| Sleep duration + stages (deep/REM/light/awake) | `com.samsung.health.sleep*` | Recovery quality |
+| Sleep score | Synthesized from stages (or Samsung's own if available) | Recovery quality |
+| Resting HR | `com.samsung.health.heart_rate*` | Overtraining signal |
+| Stress (avg + breakdown) | `com.samsung.health.stress*` | Recovery quality |
+| SpO2 avg/min | `com.samsung.health.oxygen_saturation*` | Sleep quality |
+| Steps | `com.samsung.health.step_count*` | Daily activity load |
+| Floors climbed | `com.samsung.health.floors_climbed*` | Daily activity |
+| HRV (Galaxy Watch 4+) | `com.samsung.health.heart_rate_variability*` | Readiness signal |
+
+**Output:** `analysis/samsung_wellness.json` (same schema as `garmin_wellness.json`)
+
+**Limitations vs Garmin:**
+- ❌ No Body Battery (no Samsung equivalent)
+- ❌ No Training Readiness score
+- ⚠️ Sleep score is synthesized (less validated than Garmin's)
+- ⚠️ HRV requires Galaxy Watch 4 or newer
+- ⚠️ Requires manual re-export when you want fresh data
+
+**How it enriches analysis:**
+- Same as Garmin — `npm run fast` and `npm run analyze` automatically detect and read `samsung_wellness.json` if `garmin_wellness.json` is not present
+- AI section 7 (🛌 Readiness & Recovery) adapts to available metrics (omits Body Battery / Training Readiness)
+- See `AI_SAMSUNG_WELLNESS.md` for Samsung-specific AI interpretation rules
 
 ---
 
@@ -446,6 +556,9 @@ npm run digest
 - **Race predictions**: Riegel formula estimates for 5K / 10K / Half Marathon / Marathon from your recent best pace (runs only)
 - **Training plan adherence**: if `WEEKLY_TARGET_KM`, `WEEKLY_TARGET_HOURS`, or `WEEKLY_TARGET_ELEVATION_M` are set in `.env`, shows compliance % per week
 - Garmin wellness summary (last 7-day HRV, sleep, Body Battery, training status)
+- **Goal-date recommendations**: if `GOAL_EVENT_DATE` is set, digest guidance and plan suggestions are aligned to that event date
+- **Training recommendations**: emits a precomputed recommendation payload from CTL / ATL / TSB + readiness / HRV / sleep / Body Battery / recent load; includes cause codes, confidence breakdown, recovery ETA, 7-day microcycle, and goal/sport-specific adjustments
+- **Recommendation history**: recent recommendation states are persisted to `analysis/recommendation_history.json` and used for dashboard trend summaries
 - Sends to AI with `AI_DIGEST_INSTRUCTIONS.md` — AI writes a full Sunday-review report
 - Saves the markdown report
 
@@ -486,13 +599,14 @@ npm run dashboard
 ```
 
 **What it does:**
-- Reads all `_crunched.json` files + `garmin_wellness.json` (if present)
+- Reads all `_crunched.json` files + `garmin_wellness.json` or `samsung_wellness.json` (if present)
 - Generates a fully static `dashboard.html` with interactive Chart.js graphs:
   - 📊 Weekly distance, training load, moving time, elevation
   - ❤️ HR zone distribution by week (stacked bar — Z1-Z5)
   - 📈 Avg HR per activity, VO2max trend, running pace trend, cycling power trend
   - 🏃 All activities scatter (distance by date, colored by sport)
   - 🛌 Garmin HRV, sleep score, Body Battery trends (if available)
+    - 🧠 Recommendation explainability panel (state, confidence, top drivers with friendly labels + stable codes, recovery ETA, trend summary)
   - 🎯 Weekly target lines (if `WEEKLY_TARGET_KM` / `WEEKLY_TARGET_HOURS` set in `.env`)
 - No server needed — open `dashboard.html` directly in any browser
 - Requires internet (CDN) for Chart.js on first open
@@ -507,11 +621,15 @@ npm run dashboard
 ```bash
 npm run bulk          # backfill 2 years of Strava history (enables historical context)
 npm run garmin        # backfill Garmin wellness since your watch start (enables readiness context)
+# OR for Samsung users:
+npm run samsung       # parse Samsung Health export (enables readiness context)
 ```
 
 ### Daily use
 ```bash
 npm run garmin        # keep Garmin wellness fresh (run once a day or before analyzing)
+# OR for Samsung users: re-export from Samsung Health app, then:
+npm run samsung       # re-parse Samsung Health export
 npm run fast          # fetch + analyze + update Strava for any activity
 npm run records       # update personal records after each new activity
 ```
@@ -544,10 +662,11 @@ npm run dashboard     # regenerate HTML dashboard
 | **`npm run bulk`** | **Fetch + crunch 2 years** | **None** | `output/*.json` + `analysis/*_crunched.json` |
 | **`npm run recrunch`** | **Re-crunch all downloads** | **None** | `analysis/*_crunched.json` (refreshed) |
 | **`npm run compare`** | **AI trend analysis** | **Pick period** | `analysis/comparison_*.md` |
-| **`npm run digest`** | **Weekly digest + overtraining check + race predictions** | **Pick weeks** | `analysis/digest_*w_*.md` |
+| **`npm run digest`** | **Weekly digest + overtraining check + race predictions + recommendations** | **Pick weeks** | `analysis/digest_*w_*.md` |
 | **`npm run records`** | **Personal records tracker** | **None** | `analysis/personal_records.json` |
 | **`npm run dashboard`** | **Static HTML dashboard** | **None** | `dashboard.html` |
 | **`npm run garmin`** | **Sync Garmin wellness** | **None** | `analysis/garmin_wellness.json` |
+| **`npm run samsung`** | **Parse Samsung Health export** | **None** | `analysis/samsung_wellness.json` |
 | `npm run garmin:year` | Force full Garmin re-sync | None | `analysis/garmin_wellness.json` |
 
 ---
@@ -571,4 +690,4 @@ npm run dashboard     # regenerate HTML dashboard
 - **Overtraining warning:** `npm run digest` computes acute:chronic load ratio from your TRIMP/TSS data. Load ratio >1.3 = danger zone. If Garmin data is present, HRV trend is also checked for convergent signal.
 - **Race predictions:** `npm run digest` includes Riegel-formula race time estimates for running. Based on your best recent pace. Accuracy improves when your longest runs approach the target race distance.
 - **Training targets:** Set `WEEKLY_TARGET_KM`, `WEEKLY_TARGET_HOURS`, and/or `WEEKLY_TARGET_ELEVATION_M` in `.env` to enable adherence tracking in `npm run digest` and target lines in `npm run dashboard`. If not set, those sections are skipped.
-- **Dashboard:** `npm run dashboard` generates a static `dashboard.html` — open directly in any browser (no server needed). Requires internet for Chart.js CDN on first load. Regenerate after each `npm run bulk` or `npm run garmin` run.
+- **Goal date:** Set `GOAL_EVENT_DATE=YYYY-MM-DD` in `.env` to bias `npm run digest` plan suggestions and training recommendations toward a target event.

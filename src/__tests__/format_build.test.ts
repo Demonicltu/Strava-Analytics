@@ -59,6 +59,16 @@ describe("buildDescription — Ride (no AI)", () => {
     expect(out).toContain("⚙️ ADVANCED METRICS");
     expect(out).toContain("IF:");
     expect(out).toContain("TSS:");
+    expect(out).toContain("TSS/h:");
+  });
+
+  it("shows TSS vs historical baseline when historical context exists", () => {
+    const historical = {
+      baselines: [{ period_label: "3 months", days: 90, avg_tss: 70 }],
+    };
+    const out = buildDescription(makeRideCrunched(), null, historical);
+    expect(out).toContain("TSS vs 3 months");
+    expect(out).toContain("(+");
   });
 
   it("contains W/kg when power_to_weight present", () => {

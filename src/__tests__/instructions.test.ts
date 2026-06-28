@@ -32,6 +32,7 @@ beforeAll(() => {
   writeTmp("running.md", "# Running\nRun specific.");
   writeTmp("walk.md", "# Walk\nWalk specific.");
   writeTmp("surf.md", "# Surf\nWave specific.");
+  writeTmp("paddle.md", "# Paddle\nPaddle specific.");
   writeTmp("workout.md", "# Workout\nGym specific.");
   writeTmp("devices/garmin.md", "# Garmin\nGarmin device quirks.");
 });
@@ -99,6 +100,11 @@ describe("activity type → instruction file mapping", () => {
     ["Walk", "# Walk"],
     ["Hike", "# Walk"],
     ["Hiking", "# Walk"],
+    ["StandUpPaddling", "# Paddle"],
+    ["stand up paddling", "# Paddle"],
+    ["sup", "# Paddle"],
+    ["paddle", "# Paddle"],
+    ["paddling", "# Paddle"],
     ["Surfing", "# Surf"],
     ["Windsurf", "# Surf"],
     ["Kitesurf", "# Surf"],
@@ -158,7 +164,7 @@ describe("device → instruction file mapping", () => {
 
 describe("loadComposedInstructions — composition", () => {
   it("includes common section for every activity type", () => {
-    for (const type of ["Ride", "Run", "Walk", "Surfing", "Workout"]) {
+    for (const type of ["Ride", "Run", "Walk", "StandUpPaddling", "Surfing", "Workout"]) {
       const result = loadComposedInstructions(TMP_DIR, type);
       expect(result).toContain("# Common");
     }
@@ -230,7 +236,7 @@ describe("real instructions/ folder — integration", () => {
     expect(hasRealInstructions).toBe(true);
   });
 
-  const expectedFiles = ["common.md", "cycling.md", "running.md", "walk.md", "surf.md", "workout.md"];
+  const expectedFiles = ["common.md", "cycling.md", "running.md", "walk.md", "surf.md", "paddle.md", "workout.md"];
   for (const file of expectedFiles) {
     it(`${file} exists and is non-empty`, () => {
       if (!hasRealInstructions) return;

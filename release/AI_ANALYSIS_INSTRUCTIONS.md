@@ -551,50 +551,51 @@ Each baseline in `baselines[]` covers activities of the **same sport group** (e.
 | 3 months  | 34 | 153 bpm | 5:24/km | 198 W | 79 rpm | 45 km |
 | 6 months  | 62 | 154 bpm | 5:27/km | 195 W | 79 rpm | 43 km |
 
-**Training quality metrics** (only include columns where data is present):
+**Training quality metrics** (only include columns where data is present — omit entire column if all values are null):
 
 | Period    | Avg TSS | Avg EF | Avg Z2% | Best 20min W | Avg VI | Avg Drift | Avg Decoupling | Avg VO2max |
 |-----------|---------|--------|---------|--------------|--------|-----------|----------------|------------|
 | 1 week    | 85 | 1.42 | 32% | 215 W | 1.08 | +3 bpm | 2.1% | 38.5 |
-| 1 month   | 78 | 1.38 | 28% | 208 W | 1.10 | +4 bpm | 3.2% | 37.8 |
-| 3 months  | 72 | 1.35 | 25% | 200 W | 1.12 | +5 bpm | 4.1% | 37.1 |
-| 6 months  | 68 | 1.32 | 24% | 195 W | 1.14 | +5 bpm | 4.5% | 36.8 |
-
-**Avg Elevation per ride** (if `total_distance_km` > 0 and elevation present in baselines): X m avg ascent — shows if rides are getting hillier/flatter over time.
+| 1 month   | 78† | 1.38 | 28% | 208 W | 1.10† | +4 bpm | 3.2%† | 37.8 |
+| 3 months  | 72† | — | 25% | — | 1.12† | +5 bpm | 4.1%† | 37.1 |
+| 6 months  | 68† | — | 24% | — | 1.14† | +5 bpm | 4.5%† | 36.8 |
 ```
+_† estimated from HR/pace data (no power meter) — directional indicator only_
 
-**This activity vs. your baselines** — use **3 months as the primary comparison period** for all performance metrics. Use **6 months as secondary reference** only for slow-adapting fitness indicators (EF, decoupling, VO2max, Z2%). If 3 months has fewer than 5 activities, fall back to 6 months. Skip 1 week comparisons in this list (too small a sample):
+**Avg Elevation per ride** (if elevation present in baselines): X m avg ascent.
 
-- ❤️ **HR:** X bpm vs. 3 month avg Y bpm → [lower = better aerobic efficiency / higher = harder effort or fatigue]
-- ⚡ **Pace/Power:** [faster/slower/equal] vs. 3 month avg → [interpretation]
-- 🔄 **Cadence:** X rpm vs. 3 month avg Y rpm → [higher = better neuromuscular efficiency / lower = fatigue or terrain] (only show if `avg_cadence` is present in baselines)
-- ⚡ **NP:** X W vs. 3 month avg Y W → [higher = stronger effort / lower = easier ride or recovery]
-- 🎯 **EF:** X vs. 6 month avg Y → [rising = aerobic fitness improving 🟢 / falling = fatigue or harder terrain] *(slow metric — use 6 month baseline)*
-- 📊 **TSS:** X vs. 3 month avg Y → [easy recovery / normal training / hard push]
-- 🟢 **Z2%:** X% vs. 6 month avg Y% → [more Z2 = better base building; less = more intensity] *(slow metric — use 6 month baseline)*
-- 💪 **Best 20min power:** X W vs. 3 month avg Y W → [improving / steady / declining]
-- 🔄 **VI:** X vs. 3 month avg Y → [lower VI = steadier effort; higher = more surges/variation]
-- 🫀 **Cardiac drift:** X bpm vs. 3 month avg Y bpm → [less drift = better aerobic fitness / more drift = fatigue or heat]
-- 🫁 **Aerobic decoupling:** X% vs. 6 month avg Y% → [<3% = excellent base fitness 🟢; >10% = needs more Z2 work 🔴; improving trend = aerobic adaptation] *(slow metric — use 6 month baseline)*
-- 📉 **VO2max:** X ml/kg/min vs. 6 month avg Y → [rising = fitness improving 🟢 / falling = detraining or fatigue 🔴] *(slow metric — use 6 month baseline; note: estimated, not lab-measured)*
-- 🔥 **Load (TRIMP):** X vs. 3 month avg Y → [easy recovery / normal training / hard push]
-- 📈 **Trend:** [improving / stable / declining] — based on the 3 month window (most reliable for current fitness state)
-```
+**This activity vs. your baselines** — write one bullet per metric that is present in the JSON payload. The system pre-filters metrics where both this activity AND the baseline are null — **do not invent or mention absent metrics**. Use 3mo baseline for fast metrics (HR/power/NP/cadence/TSS/TRIMP/VI/drift/best20min). Use 6mo baseline for slow metrics (EF/Z2%/decoupling/VO2max). Skip 1-week comparisons.
+
+Format: `- emoji **Label:** X unit vs. N-month avg Y unit → short context emojiFlag`
+
+**Context emoji rules:** ⬆️ higher/above avg · ⬇️ lower/below avg · 🟢 good/optimal · 🟡 neutral/in range · 🔴 concern
+
+**Fallback value rules:**
+- TSS† = estimated from TRIMP (no power meter) — append `†` and note it
+- VI† = estimated from pace variability (4th-power normalised speed / mean) — append `†`
+- Decoupling†/EF (pace/HR) = estimated from cardiac drift % — append `†`  
+- EF (pace/HR) = `pace_sec ÷ avg_HR` (lower = better for running) — label it "EF (pace/HR)" to distinguish from power-based EF
+
+Examples:
+- ❤️ **HR:** 157 bpm vs. 3-month avg 153 bpm → higher = harder effort ⬆️
+- 🔄 **Cadence:** 154 spm (146–160) vs. 3-month avg 151 spm → slightly above baseline ⬆️
+- 🔋 **Load (TRIMP):** 139 vs. 3-month avg 118 → higher = greater training stress ⬆️
+- 📉 **Cardiac drift:** 1 bpm vs. 3-month avg 5 bpm → lower = excellent aerobic stability 🟢
+- 🫁 **VO2max:** 51.2 vs. 6-month avg 51.2 → stable aerobic capacity 🟢
+- 📈 **Trend:** Stable — VO2max consistent with 6-month baseline; cardiac drift significantly below 3-month average indicating improved aerobic efficiency.
 
 **Rules:**
-- **Primary comparison: 3 months.** Use this for HR, power, pace, cadence, TSS, TRIMP, VI, cardiac drift. It captures your current training block without noise from distant past.
-- **Secondary comparison: 6 months** for slow-adapting metrics only: EF, Z2%, aerobic decoupling, VO2max. These take a full training cycle to shift meaningfully.
-- **4 windows available: 1w / 1mo / 3mo / 6mo.** 1 week is for context only — too small to base trend statements on.
-- If the 3 month window has fewer than 5 activities, fall back to 6 months and note it.
-- **Pace delta**: negative seconds = faster (improvement 🟢), positive = slower (regression 🔴 or deliberate easy day)
-- **HR delta**: lower HR at equal/better pace or power = aerobic adaptation 🟢; higher HR at same pace = fatigue or detraining 🔴
-- **Efficiency Factor (EF)** trend: rising over time = aerobic fitness improving — highlight this if data shows it
-- **TRIMP** context: <40 easy/recovery, 40–80 moderate, 80–130 hard, 130+ very hard
-- **Omit columns with all-null values** — if `avg_pace_sec_per_km` is null across all periods (e.g. cycling), show power instead; if both null, skip that column
-- **Always interpret in context** — one harder-than-average session is fine and expected; consistently elevated HR with falling pace/power across 3+ months = flag for recovery week
-- **Pace display**: convert `avg_pace_sec_per_km` to `M:SS/km` format when showing in the table
-  - If `historical_context` is null or absent, **skip this section entirely**
-  - **Sparse sport note**: If `period_label` is `"All available (N activities)"`, the historical window spans all available data for that sport (e.g. infrequent runners). Treat as equivalent to 6-month baseline — note the limited sample size and avoid strong trend claims.
+- **Primary comparison: 3 months** for HR, power, pace, cadence, TSS, TRIMP, VI, cardiac drift.
+- **Secondary comparison: 6 months** for EF, Z2%, aerobic decoupling, VO2max (slow-adapting metrics).
+- **4 windows: 1w / 1mo / 3mo / 6mo.** 1 week = context only — don't base trend claims on it.
+- If 3-month window has fewer than 5 activities, fall back to 6 months and note it.
+- **Only output bullets for metrics present in the JSON.** The payload is pre-filtered — if a key is absent, the metric was null on both sides. Do NOT mention it.
+- **Mark fallback values with †** — note estimation method in parentheses on first occurrence.
+- **Pace delta**: negative seconds = faster 🟢, positive = slower 🔴 or easy day.
+- **HR delta**: lower HR at equal/better pace = aerobic adaptation 🟢; higher HR at same pace = fatigue 🔴.
+- **Pace display**: convert `avg_pace_sec_per_km` to `M:SS/km`.
+- If `historical_context` is null or absent, **skip this section entirely**.
+- **Sparse sport note**: If `period_label` is `"All available (N activities)"`, note limited sample — avoid strong trend claims.
 
 ---
 
@@ -635,6 +636,7 @@ Data comes from the athlete's **Garmin Fenix 7 Pro Solar** watch. `night_before`
 - Poor sleep score → note it may have blunted performance or perceived effort
 - Excellent readiness + PR/high-effort session → "Conditions were clearly aligned"
 - **If readiness was poor but performance was still strong** → highlight this as a sign of good mental resilience / fitness
+- If `training_recommendation` data is present, mention the current state/session/cause codes/recovery ETA only when they materially explain the effort; do not restate the full block verbatim.
 
 **Important:**
 - Only available when `python garmin_sync.py` has been run

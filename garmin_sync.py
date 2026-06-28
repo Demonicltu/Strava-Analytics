@@ -115,6 +115,42 @@ def safe_get(fn, *fn_args, default=None, label=""):
         print(f"   ⚠️  {label}: {msg[:100]}")
         return default
 
+def parse_epoch_ms(value):
+    """Parse Garmin local timestamp fields into epoch milliseconds."""
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return None
+    if isinstance(value, str):
+        s = value.strip()
+        if not s:
+            return None
+        if s.isdigit():
+            try:
+                return int(s)
+            except (TypeError, ValueError):
+                return None
+        try:
+            return int(datetime.datetime.fromisoformat(s.replace("Z", "+00:00")).timestamp() * 1000)
+        except ValueError:
+            return None
+    return None
+
+def pick_body_battery_start_after_sleep(bb_pairs, sleep_end_local):
+    """Pick first body-battery point at/after sleep end; fallback to earliest point."""
+    if not bb_pairs:
+        return None
+    sleep_end_ms = parse_epoch_ms(sleep_end_local)
+    if sleep_end_ms is None:
+        return bb_pairs[0][1]
+    for ts, bb in bb_pairs:
+        if ts >= sleep_end_ms:
+            return bb
+    return bb_pairs[0][1]
+
 def load_existing() -> dict:
     if OUTPUT_FILE.exists():
         with open(OUTPUT_FILE, encoding="utf-8") as f:
@@ -285,7 +321,10 @@ def fetch_day(api: Garmin, date_str: str) -> dict:
                 pass
 
     if bb_pairs:
-        record["body_battery_start_of_day"] = bb_pairs[0][1]
+        record["body_battery_start_of_day"] = pick_body_battery_start_after_sleep(
+            bb_pairs,
+            record.get("sleep_end_local"),
+        )
         record["body_battery_end_of_day"] = bb_pairs[-1][1]
         record["body_battery_intraday"] = bb_pairs
 

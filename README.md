@@ -26,14 +26,18 @@ Pick an activity, and the tool will:
 1. **Download** all data from Strava (details, laps, zones, second-by-second streams, segments)
 2. **Crunch** every data point locally — zero sampling, zero cloud processing
 3. **Analyze** via AI — template renders structure deterministically; ~15 sequential AI micro-calls fill interpretation slots (verdict, tips, comparisons, etc.); each slot gets a few-shot example for style consistency; slot outputs are validated before saving; token usage logged per call
+   - Includes a deterministic **Training Recommendation** section (load + Garmin history) in the activity report
+   - Recommendation payload also includes: change drivers, cause codes, confidence breakdown, recovery ETA, 7-day microcycle, and goal/sport-specific adjustments
 4. **Push** the analysis back to your Strava activity description + private notes
 
 Beyond single-activity analysis, the tool also provides:
-- 📅 **Weekly digest** — multi-week Sunday review with overtraining warning + race predictions
+- 📅 **Weekly digest** — multi-week Sunday review with overtraining warning, race predictions, and training recommendations
 - 📊 **Trend comparison** — AI-written fitness trend report across any time window
 - 🏅 **Personal records tracker** — all-time PRs auto-detected, flagged when broken
 - 📈 **HTML dashboard** — static Chart.js dashboard covering all activities (no server needed)
 - 🛌 **Garmin Connect sync** — HRV, sleep, Body Battery, training status pulled automatically
+- 📱 **Samsung Health sync** — sleep, HRV, stress, SpO2 parsed from Samsung Health export
+- 🧠 **Recommendation history** — persisted states/trends for explainability over time
 
 ---
 
@@ -59,6 +63,13 @@ pip install -r requirements.txt
 npm run garmin
 ```
 
+**For Samsung Health readiness data (optional, requires Samsung Health export):**
+```bash
+# Export from Samsung Health app → Settings → Download personal data
+# Unzip to strava-extractor/samsung_export/ (or set SAMSUNG_EXPORT_DIR in .env)
+npm run samsung
+```
+
 > See **[COMMANDS.md](COMMANDS.md)** for full setup instructions including Strava API setup, OAuth flow, and `.env` configuration.
 
 ---
@@ -72,6 +83,7 @@ npm run garmin
 | 🏋️ **Workout** (HIIT, Strength, CrossFit, Yoga…) | 🏋️ Workout Score (WIS) | HR Zones, Interval Detection, HR Recovery Rate, Consistency, EPOC |
 | 🚶 **Walking / Hiking** | — | HR analysis (maxHR%), Heart Points, Elevation, Speed Zones, Cadence Zones |
 | 🏄 **Surfing** | — | Wave count, Max wave speed, Paddle/Ride ratio, Speed zones |
+| 🛶 **Paddle / SUP** (Stand-up paddling) | — | Stroke rate, estimated strokes, distance per stroke, paddle pace, paddle speed/stroke zones |
 
 All activities get: **Heart Rate analysis**, **Cardiac Drift**, **Relative Effort (TRIMP)**, **Heart Points**, **VO2max estimate**, **Sport-specific Training Zones**.
 
@@ -91,7 +103,7 @@ All **outdoor** activities (GPS present) additionally get: **Meteorology** (temp
 | **`npm run bulk`** | ⏳ Fetch & crunch last 2 years of Strava history (no AI — enables historical context) |
 | **`npm run recrunch`** | 🔬 Re-crunch all existing downloads to pick up new metrics (no API calls) |
 | **`npm run compare`** | 📊 AI fitness trend analysis across any time window |
-| **`npm run digest`** | 📅 Weekly/monthly digest — overtraining warning, race predictions, training adherence |
+| **`npm run digest`** | 📅 Weekly/monthly digest — overtraining warning, race predictions, training adherence, training recommendations |
 | **`npm run records`** | 🏅 Detect all-time personal records, flag newly broken ones |
 | **`npm run dashboard`** | 📈 Generate static `dashboard.html` with Chart.js graphs |
 | **`npm run garmin`** | 🛌 Sync Garmin Connect wellness data (HRV, sleep, Body Battery, training status) |
@@ -121,6 +133,7 @@ All metrics are computed locally from raw stream data. No sampling — every dat
 - 🏆 **Pogačar Factor** — composite % vs Tadej Pogačar (speed, power, efficiency, VAM) — fun-fact footnote
 - ⚡ **Normalized Power (NP)** — physiological cost of the ride
 - ⚙️ **IF / TSS** — Intensity Factor & Training Stress Score (uses `RIDER_FTP_W`)
+- ⚙️ **TSS/h + TSS vs 3mo baseline** — density and contextual load in public description output
 - 💪 **W/kg** — power-to-weight with level classification
 - 📉 **Aerobic Decoupling** — aerobic fitness indicator
 - 🔧 **Torque** — average & peak pedal force
@@ -151,6 +164,13 @@ All metrics are computed locally from raw stream data. No sampling — every dat
 - 🏄 **Paddle vs Ride** — time & distance breakdown
 - 🏄 **Surf Speed Zones** — stationary / paddling / riding / fast wave
 
+### Paddle (SUP) Metrics
+- 🛶 **Stroke Rate** — avg/max stroke rate and variability
+- 🔢 **Estimated Total Strokes** — integrated from cadence stream
+- 📏 **Distance per Stroke** — paddling efficiency signal
+- ⏱️ **Paddle Pace** — sec/km from average speed
+- 🎯 **Paddle Zones** — paddling-specific speed and stroke-rate zones
+
 > See **[METRICS.md](METRICS.md)** for full metric reference with interpretation tables.
 
 ---
@@ -169,6 +189,8 @@ strava-extractor/
 │   ├── digest_<weeks>w_<date>.md               (AI weekly digest — npm run digest)
 │   ├── personal_records.json                   (All-time PRs — npm run records)
 │   └── garmin_wellness.json                    (Garmin daily wellness database)
+│   ├── training_daily.json                     (Daily training load cache for models/charts)
+│   └── training_load_model.json                (CTL/ATL/TSB Banister model series)
 ```
 
 ---
@@ -206,6 +228,10 @@ RIDER_REST_HR=56       # → More accurate TRIMP (optional, default 60)
 RUNNER_RFTP_W=300      # → Running IF, TSS, Power Zones
 RUNNER_MAX_HR=193      # → Running HR Zones, TRIMP
 RUNNER_LTHR=181        # → LTHR-based running HR zones
+
+# Training goal (optional — used by digest recommendations / plan suggestions)
+GOAL_EVENT_DATE=2026-09-12   # Goal race/event date in YYYY-MM-DD format
+GOAL_MODE=maintain           # Recommendation tuning: build_fitness / maintain / fat_loss / race_prep
 ```
 
 ---
@@ -234,12 +260,12 @@ Strava API: **100 requests / 15 min**, **1,000 / day**. Each activity ≈ 4 API 
 |-----|----------|
 | **[COMMANDS.md](COMMANDS.md)** | Full user guide — setup, all commands with examples, workflow, tips |
 | **[METRICS.md](METRICS.md)** | Every metric explained with interpretation tables |
-| **[REFACTORING_PLAN.md](REFACTORING_PLAN.md)** | AI pipeline architecture — decisions, slot registry, few-shot & validation design |
 | **[instructions/common.md](instructions/common.md)** | Shared AI output format rules (zones, weather, history, Garmin readiness) |
 | **[instructions/cycling.md](instructions/cycling.md)** | AI format instructions for cycling activities |
 | **[instructions/running.md](instructions/running.md)** | AI format instructions for running activities |
 | **[instructions/walk.md](instructions/walk.md)** | AI format instructions for walk/hike activities |
 | **[instructions/surf.md](instructions/surf.md)** | AI format instructions for surfing activities |
+| **[instructions/paddle.md](instructions/paddle.md)** | AI format instructions for paddle/SUP activities |
 | **[instructions/workout.md](instructions/workout.md)** | AI format instructions for gym/HIIT/workout activities |
 | **[instructions/devices/garmin.md](instructions/devices/garmin.md)** | Garmin-specific field explanations (Body Battery, HRV, Training Effect) |
 | **[instructions/examples/](instructions/examples/)** | Few-shot prompt examples — one `.md` per AI slot (edit to tune output style) |

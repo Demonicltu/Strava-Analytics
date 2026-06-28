@@ -5,16 +5,21 @@
  * No AI calls in this file — pure data → markdown transformation.
  */
 
+import type { RecommendationBlock } from "./recommendations.js";
+import { causeCodeDescription, causeCodeLabel } from "./cause_codes.js";
+
 // ─── Types ────────────────────────────────────────────────────────────────────
 
-type Sport = "ride" | "run" | "walk" | "surf" | "workout" | "other";
+type Sport = "ride" | "run" | "walk" | "surf" | "paddle" | "workout" | "other";
 
 function getSport(type: string | undefined): Sport {
   if (!type) return "other";
   const t = type.toLowerCase();
+  const compact = t.replace(/[^a-z0-9]/g, "");
   if (t.includes("ride") || t.includes("cycling")) return "ride";
   if (t.includes("run")) return "run";
   if (t.includes("walk") || t.includes("hike")) return "walk";
+  if (["standuppaddling", "stand up paddling", "sup", "paddle", "paddling"].some(k => t.includes(k) || compact.includes(k.replace(/[^a-z0-9]/g, "")))) return "paddle";
   if (t.includes("surf")) return "surf";
   if (["workout","weighttraining","crosstraining","hiit","yoga","pilates","stretch"].some(k => t.includes(k))) return "workout";
   return "other";
@@ -37,6 +42,13 @@ function bar(pct: number): string {
 function paceFromKmh(kmh: number): string {
   if (!kmh || kmh <= 0) return "—";
   const secPerKm = 3600 / kmh;
+  const m = Math.floor(secPerKm / 60);
+  const s = Math.round(secPerKm % 60);
+  return `${m}:${String(s).padStart(2, "0")}/km`;
+}
+
+function paceFromSecPerKm(secPerKm: number | null | undefined): string {
+  if (!secPerKm || secPerKm <= 0) return "-";
   const m = Math.floor(secPerKm / 60);
   const s = Math.round(secPerKm % 60);
   return `${m}:${String(s).padStart(2, "0")}/km`;
@@ -112,6 +124,7 @@ function renderSummaryCard(c: any, sport: Sport): string {
     ride:    { title: "RIDE SUMMARY",    emoji: "🚴" },
     walk:    { title: "WALK SUMMARY",    emoji: "🚶" },
     surf:    { title: "SURF SESSION",    emoji: "🏄" },
+    paddle:  { title: "PADDLE SESSION",  emoji: "🛶" },
     workout: { title: "WORKOUT SUMMARY", emoji: "🏋️" },
     other:   { title: "ACTIVITY SUMMARY",emoji: "🏅" },
   };
@@ -143,7 +156,11 @@ function renderSummaryCard(c: any, sport: Sport): string {
   if (sc.avg_hr) lines.push(`❤️ Avg HR:     ${sc.avg_hr}`);
   if (sport === "ride" && sc.avg_power) lines.push(`⚡ Avg Power:  ${sc.avg_power}`);
   if (sport === "run" && c.power?.has_power_meter && sc.avg_power) lines.push(`⚡ Avg Power:  ${sc.avg_power}`);
-  if (sc.cadence) lines.push(sport === "run" ? `👣 Cadence:    ${sc.cadence}` : `🔄 Cadence:    ${sc.cadence}`);
+  if (sc.cadence) {
+    if (sport === "run") lines.push(`👣 Cadence:    ${sc.cadence}`);
+    else if (sport === "paddle") lines.push(`🛶 Stroke Rate:${sc.cadence}`);
+    else lines.push(`🔄 Cadence:    ${sc.cadence}`);
+  }
   if (sc.calories) lines.push(`🔥 Calories:   ${sc.calories}`);
   if (sc.gear) lines.push(`⚙️ Gear:       ${sc.gear}`);
   if (sc.device) lines.push(`📱 Device:     ${sc.device}`);
@@ -462,7 +479,11 @@ function renderZones(c: any, sport: Sport): string {
   }
 
   if (tz.cadence_zones?.zones?.length) {
-    const cadLabel = sport === "run" ? "Cadence Zones (spm)" : "Cadence Zones";
+    const cadLabel = sport === "run"
+      ? "Cadence Zones (spm)"
+      : sport === "paddle"
+        ? "Stroke Rate Zones (spm)"
+        : "Cadence Zones";
     lines.push(`**${cadLabel}:**`);
     lines.push(`\`\`\``);
     lines.push(`| Zone | Range | Time | % |`);
@@ -574,6 +595,25 @@ function renderGradientVAM(c: any): string {
   return lines.join("\n");
 }
 
+function renderRouteDifficulty(c: any): string {
+  const rd = c.route_difficulty;
+  if (!rd) return "";
+  const lines: string[] = [];
+  lines.push(`#### 4.8 Route Difficulty`);
+  lines.push(``);
+  lines.push(mdTable(
+    ["Metric", "Value"],
+    [
+      ["Difficulty Score", `${n(rd.score, 1)} / 100 (${rd.label ?? "—"})`],
+      ["Ascent Density", rd.components?.ascent_density_m_per_km != null ? `${n(rd.components.ascent_density_m_per_km, 1)} m/km` : "—"],
+      ["Steep Uphill Exposure", rd.components?.steep_uphill_pct != null ? `${n(rd.components.steep_uphill_pct, 1)}%` : "—"],
+      ["Total Uphill Exposure", rd.components?.uphill_total_pct != null ? `${n(rd.components.uphill_total_pct, 1)}%` : "—"],
+    ]
+  ));
+  lines.push(``);
+  return lines.join("\n");
+}
+
 function renderTorque(c: any, sport: Sport): string {
   const t = c.torque;
   if (!t) return "";
@@ -598,23 +638,54 @@ function renderCadence(c: any, sport: Sport): string {
   const cad = c.cadence;
   if (!cad?.stats) return "";
   const lines: string[] = [];
-  lines.push(`#### 4.10 Cadence`);
+  const isPaddle = sport === "paddle";
+  lines.push(`#### 4.10 ${isPaddle ? "Stroke Rate" : "Cadence"}`);
   lines.push(``);
-  const unit = sport === "run" ? "spm" : "rpm";
+  const unit = sport === "run" || isPaddle ? "spm" : "rpm";
   lines.push(mdTable(
     ["Metric", "Value"],
     [
-      ["Average Cadence", `${n(cad.stats.avg)} ${unit}`],
-      ["Max Cadence",     `${n(cad.stats.max)} ${unit}`],
-      ["Median Cadence",  `${n(cad.stats.median)} ${unit}`],
+      [isPaddle ? "Average Stroke Rate" : "Average Cadence", `${n(cad.stats.avg)} ${unit}`],
+      [isPaddle ? "Max Stroke Rate" : "Max Cadence", `${n(cad.stats.max)} ${unit}`],
+      [isPaddle ? "Median Stroke Rate" : "Median Cadence", `${n(cad.stats.median)} ${unit}`],
     ]
   ));
   lines.push(``);
   const benchmark = sport === "run"
     ? `Average cadence of ${n(cad.stats.avg)} spm vs. optimal 170–180 spm.`
-    : `Average cadence of ${n(cad.stats.avg)} rpm vs. pro benchmark 85–95 rpm.`;
+    : isPaddle
+      ? `Average stroke rate of ${n(cad.stats.avg)} spm — prioritize consistency and smooth technique over fixed cycling-style targets.`
+      : `Average cadence of ${n(cad.stats.avg)} rpm vs. pro benchmark 85–95 rpm.`;
   lines.push(benchmark);
   lines.push(``);
+  return lines.join("\n");
+}
+
+function renderPaddleAnalysis(c: any): string {
+  const pa = c.paddle_analysis;
+  if (!pa) return "";
+  const lines: string[] = [];
+  lines.push(`#### 4.12 Paddle Metrics`);
+  lines.push(``);
+
+  const rows: string[][] = [
+    ["Avg Speed", pa.avg_speed_kmh != null ? `${n(pa.avg_speed_kmh, 1)} km/h` : "—"],
+    ["Pace", paceFromSecPerKm(pa.pace_sec_per_km)],
+    ["Estimated Total Strokes", pa.estimated_total_strokes != null ? n(pa.estimated_total_strokes) : "—"],
+    ["Distance Per Stroke", pa.distance_per_stroke_m != null ? `${n(pa.distance_per_stroke_m, 2)} m` : "—"],
+  ];
+  if (pa.avg_stroke_rate_spm != null) rows.splice(2, 0, ["Avg Stroke Rate", `${n(pa.avg_stroke_rate_spm, 1)} spm`]);
+  if (pa.max_stroke_rate_spm != null) rows.splice(3, 0, ["Max Stroke Rate", `${n(pa.max_stroke_rate_spm, 1)} spm`]);
+  if (pa.stroke_rate_variability_pct != null) rows.splice(4, 0, ["Stroke Rate Variability", `${n(pa.stroke_rate_variability_pct, 1)}%`]);
+
+  lines.push(mdTable(["Metric", "Value"], rows));
+  lines.push(``);
+
+  if (pa.stroke_rate_trend) {
+    lines.push(`- Stroke rate trend: first half ${n(pa.stroke_rate_trend.first_half_spm, 1)} spm → second half ${n(pa.stroke_rate_trend.second_half_spm, 1)} spm.`);
+    lines.push(``);
+  }
+
   return lines.join("\n");
 }
 
@@ -861,6 +932,90 @@ function renderReadiness(wellness: any): string {
   return lines.join("\n");
 }
 
+function renderRecommendation(rec: RecommendationBlock | null | undefined): string {
+  if (!rec) return "";
+  const lines: string[] = [];
+  lines.push(`## 8. 🧭 TRAINING RECOMMENDATION (Load + Garmin History)`);
+  lines.push(``);
+  lines.push(mdTable(
+    ["State", "Session", "Confidence"],
+    [[rec.state.toUpperCase(), rec.session_type.toUpperCase(), rec.confidence.toUpperCase()]],
+  ));
+  lines.push(``);
+  lines.push(`- **Next 24h:** ${rec.next_24h}`);
+  lines.push(`- **Next 72h:** ${rec.next_72h}`);
+  if (rec.suggested_next_session_tss_range) {
+    lines.push(`- **Next session TSS target:** ${rec.suggested_next_session_tss_range[0]}-${rec.suggested_next_session_tss_range[1]}`);
+  }
+  if (rec.session_plan) {
+    lines.push(`- **Session archetype:** ${rec.session_plan.type}`);
+    lines.push(`- **Session duration target:** ${rec.session_plan.duration_min_range[0]}-${rec.session_plan.duration_min_range[1]} min`);
+    lines.push(`- **Session intensity hint:** ${rec.session_plan.intensity_hint}`);
+  }
+  if (rec.recovery_eta_hours != null) {
+    const days = Math.floor(rec.recovery_eta_hours / 24);
+    const hours = Math.round((rec.recovery_eta_hours % 24) * 10) / 10;
+    const etaLabel = days > 0 ? `${days}d ${hours}h` : `${hours}h`;
+    lines.push(`- **Recovery ETA to balanced state:** ~${etaLabel} with proper rest and sleep`);
+  }
+  if (rec.suggested_weekly_microcycle && rec.suggested_weekly_microcycle.length > 0) {
+    lines.push(``);
+    lines.push(`**7-Day Microcycle Plan:**`);
+    lines.push(``);
+    for (const day of rec.suggested_weekly_microcycle) {
+      lines.push(`- **Day ${day.day}:** ${day.intensity.toUpperCase()} — ${day.note}`);
+    }
+  }
+  if (rec.suggested_weekly_tss_range) {
+    lines.push(`- **Weekly TSS target:** ${rec.suggested_weekly_tss_range[0]}-${rec.suggested_weekly_tss_range[1]}`);
+  }
+  if (rec.rationale.length > 0) {
+    lines.push(``);
+    lines.push(`**Rationale:**`);
+    for (const r of rec.rationale) lines.push(`- ${r}`);
+  }
+  if (rec.signals.length > 0) {
+    lines.push(``);
+    lines.push(`**Key signals used:**`);
+    for (const s of rec.signals.slice(0, 8)) lines.push(`- ${s}`);
+  }
+  if (rec.cause_codes && rec.cause_codes.length > 0) {
+    const friendly = rec.cause_codes.map(code => causeCodeLabel(code));
+    lines.push(``);
+    lines.push(`**Top drivers:**`);
+    lines.push(`- ${friendly.join(", ")}`);
+    lines.push(``);
+    lines.push(`**Driver details:**`);
+    for (const code of rec.cause_codes) {
+      lines.push(`- **${causeCodeLabel(code)} (${code}):** ${causeCodeDescription(code)}`);
+    }
+  }
+  if (rec.confidence_factors) {
+    lines.push(``);
+    lines.push(`**Confidence breakdown:**`);
+    lines.push(`- Coverage: ${rec.confidence_factors.coverage}/100`);
+    lines.push(`- Agreement: ${rec.confidence_factors.agreement}/100`);
+    lines.push(`- Stability: ${rec.confidence_factors.stability}/100`);
+  }
+  if (rec.quality_flags && rec.quality_flags.length > 0) {
+    lines.push(``);
+    lines.push(`**Data quality:**`);
+    lines.push(`- ${rec.quality_flags.join(", ")}`);
+  }
+  if (rec.changes && (rec.changes.state_changed || rec.changes.drivers.length > 0)) {
+    lines.push(``);
+    lines.push(`**What changed vs previous day:**`);
+    lines.push(`- State changed: ${rec.changes.state_changed ? "yes" : "no"}`);
+    for (const d of rec.changes.drivers) {
+      const sign = d.delta > 0 ? "+" : "";
+      const unit = d.unit ? ` ${d.unit}` : "";
+      lines.push(`- ${d.key}: ${sign}${d.delta}${unit}`);
+    }
+  }
+  lines.push(``);
+  return lines.join("\n");
+}
+
 // ─── Main export ──────────────────────────────────────────────────────────────
 
 /**
@@ -872,6 +1027,7 @@ export function renderTemplate(
   crunched: any,
   historical: any | null,
   wellness: any | null,
+  recommendation?: RecommendationBlock | null,
 ): string {
   const sport = getSport(crunched.summary_card?.type);
   const sections: string[] = [];
@@ -888,10 +1044,12 @@ export function renderTemplate(
   sections.push(renderPowerToWeight(crunched));
   sections.push(renderZones(crunched, sport));
   sections.push(renderClimbing(crunched, sport));
+  sections.push(renderRouteDifficulty(crunched));
   sections.push(renderGradientVAM(crunched));
   sections.push(renderTorque(crunched, sport));
   sections.push(renderCadence(crunched, sport));
   sections.push(renderTemperature(crunched));
+  if (sport === "paddle") sections.push(renderPaddleAnalysis(crunched));
   sections.push(renderWeather(crunched));
   sections.push(renderHeartPoints(crunched));
   sections.push(renderVO2max(crunched));
@@ -900,6 +1058,7 @@ export function renderTemplate(
   sections.push(renderTips());
   sections.push(renderHistorical(historical));
   sections.push(renderReadiness(wellness));
+  sections.push(renderRecommendation(recommendation));
 
   return sections.filter(Boolean).join("\n");
 }

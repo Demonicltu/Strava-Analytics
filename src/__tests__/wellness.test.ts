@@ -61,9 +61,21 @@ describe("loadWellnessContext", () => {
     vi.mocked(readFileSync).mockReset();
   });
 
-  it("returns null when garmin_wellness.json does not exist", () => {
+  it("returns null when neither garmin nor samsung wellness file exists", () => {
     vi.mocked(existsSync).mockReturnValue(false);
     expect(loadWellnessContext(ANALYSIS_DIR, DATE)).toBeNull();
+  });
+
+  it("falls back to samsung_wellness.json when garmin file missing", () => {
+    vi.mocked(existsSync).mockImplementation((p: any) => {
+      if (String(p).includes("garmin_wellness")) return false;
+      if (String(p).includes("samsung_wellness")) return true;
+      return false;
+    });
+    vi.mocked(readFileSync).mockReturnValue(JSON.stringify(makeWellnessData()) as any);
+    const ctx = loadWellnessContext(ANALYSIS_DIR, DATE)!;
+    expect(ctx).not.toBeNull();
+    expect(ctx.activity_date).toBe(DATE);
   });
 
   it("returns null when JSON is malformed", () => {

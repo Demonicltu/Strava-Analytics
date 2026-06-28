@@ -35,6 +35,9 @@ function makeSummary(date: string, sport: string, overrides: Partial<ActivitySum
     z2_pct: 40,
     best_20min_power_w: 220,
     aerobic_decoupling_pct: 3,
+    tss_is_hr_based: false,
+    vi_is_pace_based: false,
+    decoupling_is_drift: false,
     ...overrides,
   };
 }

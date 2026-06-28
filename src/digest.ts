@@ -4,43 +4,65 @@
  *
  * Usage: npm run digest
  */
-import { createInterface } from "readline";
 import { readFileSync, writeFileSync, existsSync } from "fs";
-import { join, dirname } from "path";
-import { fileURLToPath } from "url";
+import { join } from "path";
 import "dotenv/config";
 import { ActivitySummary, avg, sum, round2, loadAllSummaries } from "./summary_utils.js";
+import { computeLatestLoadMetrics } from "./training_intelligence.js";
+import { buildTrainingRecommendations } from "./recommendations.js";
+import { prompt } from "./cli_utils.js";
+import { computeReadiness, hrvValue, meanHalfDelta } from "./readiness_utils.js";
+import { loadAllConfigs, type AiConfig } from "./ai_client.js";
+import { resolveBaseDir } from "./paths.js";
 
-let __dirname2: string;
-try { __dirname2 = dirname(fileURLToPath(import.meta.url)); } catch { __dirname2 = process.cwd(); }
-const BASE_DIR = existsSync(join(__dirname2, "..", "package.json")) ? join(__dirname2, "..") : process.cwd();
+const BASE_DIR = resolveBaseDir(import.meta.url);
 const ANALYSIS_DIR = join(BASE_DIR, "analysis");
 const INSTRUCTIONS_PATH = join(BASE_DIR, "AI_DIGEST_INSTRUCTIONS.md");
 
-interface AnalyzeConfig {
-  provider: "openai" | "gemini" | "groq" | "openrouter";
-  apiKey: string;
-  model: string;
-}
-
-function prompt(q: string): Promise<string> {
-  const rl = createInterface({ input: process.stdin, output: process.stdout });
-  return new Promise(r => { rl.question(q, a => { rl.close(); r(a.trim()); }); });
-}
-
 function sleep(ms: number): Promise<void> { return new Promise(r => setTimeout(r, ms)); }
 
-function loadConfigs(): AnalyzeConfig[] {
-  const c: AnalyzeConfig[] = [];
-  const g = process.env["GEMINI_API_KEY"];
-  const gr = process.env["GROQ_API_KEY"];
-  const or = process.env["OPENROUTER_API_KEY"];
-  const oa = process.env["OPENAI_API_KEY"];
-  if (g) c.push({ provider: "gemini", apiKey: g, model: process.env["GEMINI_MODEL"] || "gemini-2.5-flash" });
-  if (gr) c.push({ provider: "groq", apiKey: gr, model: process.env["GROQ_MODEL"] || "llama-3.3-70b-versatile" });
-  if (or) c.push({ provider: "openrouter", apiKey: or, model: process.env["OPENROUTER_MODEL"] || "deepseek/deepseek-chat-v3-0324" });
-  if (oa) c.push({ provider: "openai", apiKey: oa, model: process.env["OPENAI_MODEL"] || "gpt-4o" });
-  return c;
+
+function buildPlanSuggestions(ctl: number, readiness: number | null, goalDate: string | null): any | null {
+  if (!goalDate) return null;
+  const goal = new Date(goalDate);
+  if (isNaN(goal.getTime())) return null;
+
+  const now = new Date();
+  const daysLeft = Math.max(0, Math.floor((goal.getTime() - now.getTime()) / 86_400_000));
+  if (daysLeft === 0) return null;
+
+  const weeks = Math.min(8, Math.max(1, Math.ceil(daysLeft / 7)));
+  const baseRamp = readiness != null && readiness < 60 ? 0.05 : readiness != null && readiness >= 75 ? 0.1 : 0.075;
+  const out: any[] = [];
+  let curCtl = Math.max(ctl, 1);
+
+  for (let i = 1; i <= weeks; i++) {
+    const isTaper = i === weeks || i === weeks - 1;
+    const isDeload = !isTaper && i % 4 === 0;
+    if (isTaper) curCtl *= 0.9;
+    else if (isDeload) curCtl *= 0.92;
+    else curCtl *= (1 + baseRamp);
+
+    out.push({
+      week_index: i,
+      phase: isTaper ? "taper" : isDeload ? "deload" : "build",
+      target_ctl: Math.round(curCtl * 10) / 10,
+      target_weekly_tss: Math.round(curCtl * 7),
+      notes: isTaper
+        ? "Reduce load to freshen up for goal event"
+        : isDeload
+          ? "Planned deload week"
+          : `Build week (${Math.round(baseRamp * 100)}% ramp)`,
+    });
+  }
+
+  return {
+    goal_event_date: goalDate,
+    days_to_event: daysLeft,
+    horizon_weeks: weeks,
+    ramp_rate: Math.round(baseRamp * 1000) / 10,
+    weeks: out,
+  };
 }
 
 // ─── HR Zone distribution helper ───
@@ -67,40 +89,7 @@ function aggregateHrZones(acts: ActivitySummary[]): Record<string, number> | nul
  * Returns the current (latest day) values.
  */
 function computeCtlAtlTsb(acts: ActivitySummary[]): { ctl: number; atl: number; tsb: number; acwr: number | null } {
-  if (acts.length === 0) return { ctl: 0, atl: 0, tsb: 0, acwr: null };
-
-  // Build a daily load map
-  const dailyLoad: Map<string, number> = new Map();
-  for (const a of acts) {
-    const load = a.trimp ?? a.tss ?? 0;
-    dailyLoad.set(a.date, (dailyLoad.get(a.date) ?? 0) + load);
-  }
-
-  // Sort all unique dates
-  const sortedDates = [...dailyLoad.keys()].sort();
-  if (sortedDates.length === 0) return { ctl: 0, atl: 0, tsb: 0, acwr: null };
-
-  const kCtl = 2 / (42 + 1); // EWMA decay for CTL (42-day)
-  const kAtl = 2 / (7 + 1);  // EWMA decay for ATL (7-day)
-
-  // Iterate day-by-day from earliest to today, filling gaps with 0
-  const start = new Date(sortedDates[0]);
-  const end = new Date();
-  let ctl = 0, atl = 0;
-
-  for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
-    const dateStr = d.toISOString().slice(0, 10);
-    const load = dailyLoad.get(dateStr) ?? 0;
-    ctl = ctl + kCtl * (load - ctl);
-    atl = atl + kAtl * (load - atl);
-  }
-
-  const tsb = Math.round((ctl - atl) * 10) / 10;
-  const ctlR = Math.round(ctl * 10) / 10;
-  const atlR = Math.round(atl * 10) / 10;
-  const acwr = ctlR > 0 ? Math.round((atlR / ctlR) * 100) / 100 : null;
-
-  return { ctl: ctlR, atl: atlR, tsb, acwr };
+  return computeLatestLoadMetrics(acts);
 }
 
 // ─── Overtraining warning ───
@@ -265,17 +254,51 @@ function buildDigest(allSummaries: ActivitySummary[], weeks: number, wellnessByD
     };
   }
 
-  // Recent Garmin wellness summary (last 7 days)
-  const recentDates = [...wellnessByDate.keys()].sort().slice(-7);
+  // Recent Garmin wellness summary (last 7 / 28 days)
+  const allWellnessDates = [...wellnessByDate.keys()].sort();
+  const recentDates = allWellnessDates.slice(-7);
+  const recentDates28 = allWellnessDates.slice(-28);
+  const readinessSeries = recentDates.map(d => {
+    const r = computeReadiness(wellnessByDate.get(d));
+    return { date: d, score: r.score, label: r.label, components: r.components };
+  }).filter(x => x.score != null);
+  const latestReadiness = readinessSeries.length > 0 ? readinessSeries[readinessSeries.length - 1] : null;
+
+  const readinessSeries28 = recentDates28.map(d => {
+    const r = computeReadiness(wellnessByDate.get(d));
+    return r.score;
+  }).filter((v): v is number => v != null);
+
+  const hrv7 = recentDates.map(d => hrvValue(wellnessByDate.get(d))).filter((v): v is number => v != null);
+  const hrvDelta7 = meanHalfDelta(hrv7);
+  const hrvTrend = hrvDelta7 == null ? null : hrvDelta7 <= -3 ? "declining" : hrvDelta7 >= 3 ? "improving" : "stable";
+
+  const sleepAvg7 = avg(recentDates.map(d => wellnessByDate.get(d)?.sleep_score ?? null));
+  const sleepAvg28 = avg(recentDates28.map(d => wellnessByDate.get(d)?.sleep_score ?? null));
+  const bbAvg7 = avg(recentDates.map(d => wellnessByDate.get(d)?.body_battery_start_of_day ?? null));
+  const bbAvg28 = avg(recentDates28.map(d => wellnessByDate.get(d)?.body_battery_start_of_day ?? null));
+
   const wellnessSummary = recentDates.length > 0 ? {
     dates: recentDates,
-    avg_hrv: avg(recentDates.map(d => wellnessByDate.get(d)?.hrv_last_night ?? null)),
-    avg_sleep_score: avg(recentDates.map(d => wellnessByDate.get(d)?.sleep_score ?? null)),
+    avg_hrv: avg(recentDates.map(d => hrvValue(wellnessByDate.get(d)) ?? null)),
+    avg_sleep_score: sleepAvg7,
     avg_resting_hr: avg(recentDates.map(d => wellnessByDate.get(d)?.resting_hr ?? null)),
-    avg_body_battery_start: avg(recentDates.map(d => wellnessByDate.get(d)?.body_battery_start_of_day ?? null)),
+    avg_body_battery_start: bbAvg7,
+    avg_sleep_score_28d: sleepAvg28,
+    avg_body_battery_start_28d: bbAvg28,
+    readiness_avg_7d: avg(readinessSeries.map(r => r.score)),
+    readiness_avg_28d: avg(readinessSeries28),
+    garmin_days_7d: recentDates.length,
+    garmin_days_28d: recentDates28.length,
+    hrv_delta_7d: hrvDelta7 != null ? Math.round(hrvDelta7 * 10) / 10 : null,
+    hrv_trend_7d: hrvTrend,
     latest_training_status: wellnessByDate.get(recentDates[recentDates.length - 1])?.training_status ?? null,
     latest_acute_load: wellnessByDate.get(recentDates[recentDates.length - 1])?.acute_load ?? null,
     latest_load_ratio: wellnessByDate.get(recentDates[recentDates.length - 1])?.load_ratio ?? null,
+    latest_readiness_score: latestReadiness?.score ?? null,
+    latest_readiness_label: latestReadiness?.label ?? null,
+    avg_readiness_score: avg(readinessSeries.map(r => r.score)),
+    readiness_series: readinessSeries,
   } : null;
 
   const overtTraining = checkOvertTraining(acts, wellnessByDate);
@@ -283,6 +306,28 @@ function buildDigest(allSummaries: ActivitySummary[], weeks: number, wellnessByD
 
   // CTL/ATL/TSB over full history (needs all history for EWMA warmup, not just digest window)
   const { ctl, atl, tsb } = computeCtlAtlTsb(allSummaries);
+  const planSuggestions = buildPlanSuggestions(ctl, latestReadiness?.score ?? null, process.env["GOAL_EVENT_DATE"] ?? null);
+  const trainingRecommendations = buildTrainingRecommendations({
+    ctl,
+    atl,
+    tsb,
+    readiness_score: latestReadiness?.score ?? null,
+    readiness_label: latestReadiness?.label ?? null,
+    hrv_trend: hrvTrend,
+    hrv_delta_7: hrvDelta7,
+    sleep_score: wellnessSummary?.avg_sleep_score ?? null,
+    body_battery: wellnessSummary?.avg_body_battery_start ?? null,
+    readiness_avg_7: wellnessSummary?.readiness_avg_7d ?? null,
+    readiness_avg_28: wellnessSummary?.readiness_avg_28d ?? null,
+    sleep_avg_7: wellnessSummary?.avg_sleep_score ?? null,
+    sleep_avg_28: wellnessSummary?.avg_sleep_score_28d ?? null,
+    body_battery_avg_7: wellnessSummary?.avg_body_battery_start ?? null,
+    body_battery_avg_28: wellnessSummary?.avg_body_battery_start_28d ?? null,
+    garmin_days_7: wellnessSummary?.garmin_days_7d ?? null,
+    garmin_days_28: wellnessSummary?.garmin_days_28d ?? null,
+    recent_activities: acts,
+    goal_event_date: process.env["GOAL_EVENT_DATE"] ?? null,
+  });
 
   // Training plan adherence (from .env — optional)
   const weeklyTargets: any = {};
@@ -296,8 +341,7 @@ function buildDigest(allSummaries: ActivitySummary[], weeks: number, wellnessByD
     weeklyTargets.hours = tgtHours;
     weeklyTargets.elevation_m = tgtElev;
 
-    const weeksWithData = weeklyBreakdown;
-    const adherence = weeksWithData.map(w => {
+    const adherence = weeklyBreakdown.map(w => {
       const a: Record<string, any> = { week: w.week };
       if (tgtKm) { a.km_actual = w.total_distance_km; a.km_target = tgtKm; a.km_pct = round2(((w.total_distance_km ?? 0) / tgtKm) * 100); }
       if (tgtHours) { a.hours_actual = w.total_time_h; a.hours_target = tgtHours; a.hours_pct = round2(((w.total_time_h ?? 0) / tgtHours) * 100); }
@@ -334,9 +378,13 @@ function buildDigest(allSummaries: ActivitySummary[], weeks: number, wellnessByD
       tsb_form: tsb,
       acwr: overtTraining.load_ratio,
       tsb_label: (tsb ?? 0) > 10 ? "Fresh / Undertrained" : (tsb ?? 0) >= -10 ? "Optimal Training Form" : "Fatigued — consider recovery",
+      readiness_score: latestReadiness?.score ?? null,
+      readiness_label: latestReadiness?.label ?? null,
     } : null,
     race_predictions: racePrediction,
     garmin_wellness_summary: wellnessSummary,
+    training_plan_suggestions: planSuggestions,
+    training_recommendations: trainingRecommendations,
     ...(trainingAdherence ? { training_plan_adherence: trainingAdherence } : {}),
   };
 }
@@ -349,7 +397,7 @@ const PROVIDER_URLS: Record<string, string> = {
   openrouter: "https://openrouter.ai/api/v1/chat/completions",
 };
 
-async function callAI(cfg: AnalyzeConfig, instructions: string, data: string): Promise<string> {
+async function callAI(cfg: AiConfig, instructions: string, data: string): Promise<string> {
   const { default: axios } = await import("axios");
   const msg = `Write the weekly training digest based on this pre-computed data:\n\n${data}`;
 
@@ -393,12 +441,14 @@ async function main() {
 
   console.log(`✅ Loaded ${allSummaries.length} activities (${allSummaries[0].date} → ${allSummaries[allSummaries.length - 1].date})\n`);
 
-  // Load Garmin wellness if available
-  const wellnessPath = join(ANALYSIS_DIR, "garmin_wellness.json");
+  // Load wellness data (Garmin or Samsung) if available
+  const garminWPath = join(ANALYSIS_DIR, "garmin_wellness.json");
+  const samsungWPath = join(ANALYSIS_DIR, "samsung_wellness.json");
+  const wellnessFilePath = existsSync(garminWPath) ? garminWPath : existsSync(samsungWPath) ? samsungWPath : null;
   const wellnessByDate: Map<string, any> = new Map();
-  if (existsSync(wellnessPath)) {
+  if (wellnessFilePath) {
     try {
-      const raw = JSON.parse(readFileSync(wellnessPath, "utf-8"));
+      const raw = JSON.parse(readFileSync(wellnessFilePath, "utf-8"));
       for (const [d, v] of Object.entries(raw)) wellnessByDate.set(d, v);
       console.log(`   🛌 Garmin wellness loaded (${wellnessByDate.size} days)\n`);
     } catch { /* ignore */ }
@@ -439,7 +489,7 @@ async function main() {
   if (!existsSync(INSTRUCTIONS_PATH)) { console.error("❌ AI_DIGEST_INSTRUCTIONS.md not found!"); process.exit(1); }
   const instructions = readFileSync(INSTRUCTIONS_PATH, "utf-8");
 
-  const configs = loadConfigs();
+  const configs = loadAllConfigs();
   if (configs.length === 0) { console.error("❌ No AI API key found."); process.exit(1); }
   console.log(`✅ AI providers: ${configs.map(c => `${c.provider.toUpperCase()} (${c.model})`).join(" → ")}`);
 

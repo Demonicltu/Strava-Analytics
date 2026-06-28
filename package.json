@@ -13,6 +13,7 @@
     "recrunch": "tsx src/recrunch.ts",
     "compare": "tsx src/compare.ts",
     "garmin": "python garmin_sync.py --since 2025-11-11",
+    "samsung": "python samsung_sync.py",
     "garmin:year": "python garmin_sync.py --since 2025-11-11",
     "digest": "tsx src/digest.ts",
     "records": "tsx src/records.ts",

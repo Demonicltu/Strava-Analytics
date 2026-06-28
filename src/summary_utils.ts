@@ -67,6 +67,7 @@ export interface PeriodBaseline {
   tss_is_hr_based: boolean;
   vi_is_pace_based: boolean;
   decoupling_is_drift: boolean;
+  ef_is_pace_based: boolean;
 }
 
 /** Minimum historical activities required per period to emit a baseline */
@@ -77,10 +78,12 @@ export const MIN_HISTORY_COUNT = 3;
 /** Group fine-grained Strava sport types into coarse categories */
 export function groupSport(sportType: string): string {
   const t = sportType || "Unknown";
+  const compact = t.toLowerCase().replace(/[^a-z0-9]/g, "");
   if (["Run", "TrailRun", "VirtualRun"].includes(t)) return "Run";
   if (["Ride", "GravelRide", "MountainBikeRide", "VirtualRide", "EBikeRide"].includes(t)) return "Ride";
   if (["Swim", "OpenWaterSwim"].includes(t)) return "Swim";
   if (["Walk", "Hike"].includes(t)) return "Walk";
+  if (["StandUpPaddling", "Paddling", "Paddle"].includes(t) || ["standuppaddling", "standuppaddle", "paddle", "paddling", "sup"].some(k => compact.includes(k))) return "Paddle";
   if (["Surf", "Windsurf", "Kitesurf"].includes(t)) return "Surf";
   if (["WeightTraining", "Yoga", "Pilates", "Crossfit", "Workout"].includes(t)) return "Strength";
   return t;
@@ -154,7 +157,7 @@ export function extractSummary(raw: any, filename: string): ActivitySummary | nu
     const distRaw = raw.summary_card?.distance;
     const distance_km = distRaw ? parseFloat((distRaw as string).replace(" km", "")) : 0;
 
-    const tssRaw = raw.training_metrics?.tss ?? null;
+    const tssRaw = raw.training_metrics?.tss_heat_adjusted ?? raw.training_metrics?.tss ?? null;
     const trimpRaw = raw.relative_effort?.score ?? null;
     const vo2maxRaw = raw.vo2max?.value ?? null;
 
@@ -306,7 +309,16 @@ export function buildHistoricalContext(
       avg_normalized_power_w: avg(inWindow.map(a => a.normalized_power ?? a.avg_power_w)),
       avg_tss: avg(inWindow.map(a => a.tss)),
       avg_trimp: avg(inWindow.map(a => a.trimp)),
-      avg_efficiency_factor: avg(inWindow.map(a => a.efficiency_factor)),
+      avg_efficiency_factor: (() => {
+        const powerEF = avg(inWindow.map(a => a.efficiency_factor));
+        if (powerEF != null) return powerEF;
+        // pace-based fallback: pace_sec_per_km / avg_hr (s/km/bpm, lower = better)
+        return avg(inWindow.map(a =>
+          a.pace_sec_per_km != null && a.avg_hr != null && a.avg_hr > 0
+            ? Math.round((a.pace_sec_per_km / a.avg_hr) * 1000) / 1000
+            : null
+        ));
+      })(),
       avg_vo2max: avg(inWindow.map(a => a.vo2max)),
       avg_cadence: avg(inWindow.map(a => a.avg_cadence)),
       avg_variability_index: avg(inWindow.map(a => a.variability_index)),
@@ -319,6 +331,8 @@ export function buildHistoricalContext(
       tss_is_hr_based: inWindow.some(a => a.tss_is_hr_based),
       vi_is_pace_based: inWindow.some(a => a.vi_is_pace_based),
       decoupling_is_drift: inWindow.some(a => a.decoupling_is_drift),
+      ef_is_pace_based: inWindow.every(a => a.efficiency_factor == null) &&
+        inWindow.some(a => a.pace_sec_per_km != null && a.avg_hr != null),
     });
   }
 
@@ -364,10 +378,10 @@ export function checkPRs(
   const isBestPow = activity.normalized_power != null && isFinite(maxPower) && activity.normalized_power > maxPower;
   const isBigClimb = activity.elevation_m > maxElev;
 
-  if (isLongest) labels.push(`🏅 Longest ${activity.sport} (${round2(activity.distance_km)} km)`);
-  if (isFastest) labels.push(`🏅 Fastest ${activity.sport} pace (${Math.floor(activity.pace_sec_per_km!/60)}:${String(Math.round(activity.pace_sec_per_km!%60)).padStart(2,"0")}/km)`);
-  if (isBestPow) labels.push(`🏅 Best normalized power (${Math.round(activity.normalized_power!)} W)`);
-  if (isBigClimb) labels.push(`🏅 Biggest climb (${Math.round(activity.elevation_m)} m)`);
+  if (isLongest) labels.push(` Longest ${activity.sport} (${round2(activity.distance_km)} km)`);
+  if (isFastest) labels.push(` Fastest ${activity.sport} pace (${Math.floor(activity.pace_sec_per_km!/60)}:${String(Math.round(activity.pace_sec_per_km!%60)).padStart(2,"0")}/km)`);
+  if (isBestPow) labels.push(` Best normalized power (${Math.round(activity.normalized_power!)} W)`);
+  if (isBigClimb) labels.push(` Biggest climb (${Math.round(activity.elevation_m)} m)`);
 
   return {
     is_pr_longest_distance: isLongest,

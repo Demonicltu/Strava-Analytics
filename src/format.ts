@@ -163,14 +163,16 @@ function formatTablesForPlainText(text: string): string {
 
 // ─── Activity type helpers ───
 
-type ActivityCategory = "ride" | "run" | "walk" | "surf" | "workout" | "other";
+type ActivityCategory = "ride" | "run" | "walk" | "surf" | "paddle" | "workout" | "other";
 
 function categorize(type: string | undefined): ActivityCategory {
   if (!type) return "other";
   const t = type.toLowerCase();
+  const compact = t.replace(/[^a-z0-9]/g, "");
   if (t.includes("ride") || t.includes("cycling")) return "ride";
   if (t.includes("run")) return "run";
   if (t.includes("walk") || t.includes("hike")) return "walk";
+  if (["standuppaddling", "stand up paddling", "sup", "paddle", "paddling"].some(k => t.includes(k) || compact.includes(k.replace(/[^a-z0-9]/g, "")))) return "paddle";
   if (t.includes("surf")) return "surf";
   if (["workout", "weighttraining", "crossfit", "hiit", "yoga", "pilates", "rowing", "elliptical", "stairstepper"].includes(t)) return "workout";
   return "other";
@@ -182,6 +184,7 @@ function activityLabel(cat: ActivityCategory): { summary: string; emoji: string;
     case "run":     return { summary: "RUN SUMMARY",     emoji: "🏃", speedLabel: "Avg Pace" };
     case "ride":    return { summary: "RIDE SUMMARY",    emoji: "🚴", speedLabel: "Avg Speed" };
     case "surf":    return { summary: "SURF SESSION",    emoji: "🏄", speedLabel: "Avg Speed" };
+    case "paddle":  return { summary: "PADDLE SESSION",  emoji: "🛶", speedLabel: "Avg Speed" };
     case "workout": return { summary: "WORKOUT SUMMARY", emoji: "🏋️", speedLabel: "Duration" };
     default:        return { summary: "ACTIVITY SUMMARY", emoji: "🏅", speedLabel: "Avg Speed" };
   }
@@ -301,7 +304,7 @@ export function buildDescription(crunched: any, analysisText: string | null, his
     if (sc.avg_hr) lines.push(`❤️ Avg HR:     ${sc.avg_hr}`);
     // Power/cadence for rides; cadence for runs (spm)
     if (cat === "ride" && sc.avg_power) lines.push(`🦵 Avg Power:  ${sc.avg_power}`);
-    if (sc.cadence) lines.push(`🔄 Cadence:    ${sc.cadence}`);
+    if (sc.cadence) lines.push(cat === "paddle" ? `🛶 Stroke Rate:${sc.cadence}` : `🔄 Cadence:    ${sc.cadence}`);
     if (sc.calories) lines.push(`🔥 Calories:   ${sc.calories}`);
     if (sc.gear) lines.push(`👟 Gear:       ${sc.gear}`);
     lines.push(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
@@ -317,6 +320,22 @@ export function buildDescription(crunched: any, analysisText: string | null, his
       lines.push(`⚙️ ADVANCED METRICS`);
       if (tm) {
         lines.push(`  IF: ${tm.intensity_factor} (${tm.intensity_factor_label}) | TSS: ${tm.tss}`);
+        const movingSec = Number(sc?.moving_time_seconds ?? 0);
+        if (tm.tss != null && movingSec > 0) {
+          const tssPerHour = Math.round((tm.tss / (movingSec / 3600)) * 10) / 10;
+          lines.push(`  TSS/h: ${tssPerHour}`);
+        }
+
+        const baseline3m = historicalCtx?.baselines?.find((b: any) => b.days >= 85 && b.days <= 95)
+          ?? historicalCtx?.baselines?.at?.(-1)
+          ?? null;
+        const avgTss = baseline3m?.avg_tss ?? null;
+        if (tm.tss != null && avgTss != null && avgTss > 0) {
+          const pct = Math.round((tm.tss / avgTss - 1) * 100);
+          const sign = pct > 0 ? "+" : "";
+          const label = baseline3m?.period_label ?? "baseline";
+          lines.push(`  TSS vs ${label}: ${tm.tss} vs ${Math.round(avgTss)} (${sign}${pct}%)`);
+        }
         if (tm.ftp_warning) lines.push(`  ${tm.ftp_warning}`);
       }
       if (ptw) {
@@ -351,6 +370,24 @@ export function buildDescription(crunched: any, analysisText: string | null, his
       if (re) lines.push(`  Relative Effort: ${re.score} (${re.interpretation})`);
       if (crunched.vo2max) lines.push(`  VO2max: ${crunched.vo2max.value} ml/kg/min (${crunched.vo2max.level})`);
     }
+  } else if (cat === "paddle") {
+    const pa = crunched.paddle_analysis;
+    const re = crunched.relative_effort;
+    if (pa || re) {
+      lines.push(``);
+      lines.push(`🛶 PADDLE METRICS`);
+      if (pa?.avg_stroke_rate_spm != null) lines.push(`  Avg Stroke Rate: ${pa.avg_stroke_rate_spm} spm`);
+      if (pa?.max_stroke_rate_spm != null) lines.push(`  Max Stroke Rate: ${pa.max_stroke_rate_spm} spm`);
+      if (pa?.estimated_total_strokes != null) lines.push(`  Estimated Strokes: ${pa.estimated_total_strokes}`);
+      if (pa?.distance_per_stroke_m != null) lines.push(`  Distance/Stroke: ${pa.distance_per_stroke_m} m`);
+      if (pa?.pace_sec_per_km != null) {
+        const sec = pa.pace_sec_per_km;
+        const mm = Math.floor(sec / 60);
+        const ss = Math.round(sec % 60).toString().padStart(2, "0");
+        lines.push(`  Pace: ${mm}:${ss}/km`);
+      }
+      if (re) lines.push(`  Relative Effort: ${re.score} (${re.interpretation})`);
+    }
   } else if (crunched.relative_effort) {
     // For runs/walks/surf, just show relative effort if available
     lines.push(``);
@@ -365,6 +402,15 @@ export function buildDescription(crunched: any, analysisText: string | null, his
     lines.push(`💚 HEART POINTS: ${hp.points} (${hp.pct_of_weekly_target} of weekly 150 target)`);
     if (hp.moderate_minutes != null && hp.vigorous_minutes != null) {
       lines.push(`  Moderate: ${hp.moderate_minutes} min | Vigorous: ${hp.vigorous_minutes} min`);
+    }
+  }
+
+  if (crunched.route_difficulty?.score != null) {
+    const rd = crunched.route_difficulty;
+    lines.push(``);
+    lines.push(`🧭 ROUTE DIFFICULTY: ${rd.score}/100 (${rd.label})`);
+    if (rd.components?.ascent_density_m_per_km != null) {
+      lines.push(`  Ascent density: ${rd.components.ascent_density_m_per_km} m/km`);
     }
   }
 
@@ -568,6 +614,13 @@ export function buildDescription(crunched: any, analysisText: string | null, his
       { keyword: "Heart Rate", emoji: "❤️" },
       { keyword: "Training Load", emoji: "🏋️" },
       { keyword: "Temperature", emoji: "🌡️" },
+    ] : cat === "paddle" ? [
+      { keyword: "Pacing", emoji: "📈" },
+      { keyword: "Heart Rate", emoji: "❤️" },
+      { keyword: "Training Zones", emoji: "🎯" },
+      { keyword: "Stroke Rate", emoji: "🛶" },
+      { keyword: "Paddle Metrics", emoji: "🧭" },
+      { keyword: "Temperature", emoji: "🌡️" },
     ] : cat === "workout" ? [
       { keyword: "Training Load", emoji: "🏋️" },
       { keyword: "Heart Rate", emoji: "❤️" },
@@ -634,6 +687,13 @@ export function buildDescription(crunched: any, analysisText: string | null, his
       lines.push(``);
       lines.push(`🛌 READINESS`);
       lines.push(formatTablesForPlainText(readiness.trim()));
+    }
+
+    const recommendation = extractSection(analysisText, "Training Recommendation");
+    if (recommendation) {
+      lines.push(``);
+      lines.push(`🧭 TRAINING RECOMMENDATION`);
+      lines.push(formatTablesForPlainText(recommendation.trim()));
     }
   } else if (wellnessCtx) {
     const n = wellnessCtx.night_before;

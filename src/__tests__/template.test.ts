@@ -54,6 +54,7 @@ function makeRide(overrides: Record<string, any> = {}): any {
     },
     climbing_analysis: { total_ascent_m: 800, total_descent_m: 780, flat_pct: 40, uphill_pct: 35, downhill_pct: 25 },
     gradient_analysis: { distribution: [{ label: "Flat (0-2%)", pct: 40 }] },
+    route_difficulty: { score: 61.5, label: "Hard", components: { ascent_density_m_per_km: 10.2, steep_uphill_pct: 12.8, uphill_total_pct: 38.4 } },
     torque: { avg_nm: 22, peak_nm: 55 },
     meteorology: {
       at_activity_start: { temperature_c: 22, apparent_temperature_c: 20, humidity_pct: 60, windspeed_kmh: 15, wind_direction: "NW", weather_description: "Clear sky" },
@@ -89,6 +90,26 @@ function makeRun(overrides: Record<string, any> = {}): any {
       near_promotion: true,
       next_category: "Sub-Elite",
       metrics: { "Pace": "5:00/km" },
+    },
+    ...overrides,
+  };
+}
+
+function makePaddle(overrides: Record<string, any> = {}): any {
+  return {
+    summary_card: { type: "StandUpPaddling", date: "2026-06-20", distance: "7.26 km", moving_time: "2:12:07", moving_time_seconds: 7927, avg_speed: "3.3 km/h", cadence: "51.4 spm" },
+    pacing: { first_half: { avg_speed_kmh: 3.2, avg_hr: 93 }, second_half: { avg_speed_kmh: 3.5, avg_hr: 96 } },
+    heart_rate: { stats: { avg: 95, max: 118, median: 96 } },
+    cadence: { stats: { avg: 51, max: 79, median: 50 } },
+    paddle_analysis: {
+      avg_speed_kmh: 3.3,
+      pace_sec_per_km: 1090.9,
+      avg_stroke_rate_spm: 51.4,
+      max_stroke_rate_spm: 79,
+      stroke_rate_variability_pct: 32.1,
+      estimated_total_strokes: 6704,
+      distance_per_stroke_m: 1.08,
+      stroke_rate_trend: { first_half_spm: 49.8, second_half_spm: 53.2, delta_spm: 3.4 },
     },
     ...overrides,
   };
@@ -162,6 +183,11 @@ describe("renderTemplate", () => {
     it("renders workout summary for workout type", () => {
       const out = renderTemplate({ summary_card: { type: "WeightTraining" } }, null, null);
       expect(out).toContain("WORKOUT SUMMARY");
+    });
+
+    it("renders paddle summary for StandUpPaddling type", () => {
+      const out = renderTemplate(makePaddle(), null, null);
+      expect(out).toContain("PADDLE SESSION");
     });
 
     it("renders activity summary for unknown type", () => {
@@ -378,6 +404,15 @@ describe("renderTemplate", () => {
     });
   });
 
+  describe("route difficulty section", () => {
+    it("renders route difficulty score and component metrics", () => {
+      const out = renderTemplate(makeRide(), null, null);
+      expect(out).toContain("Route Difficulty");
+      expect(out).toContain("61.5 / 100 (Hard)");
+      expect(out).toContain("Ascent Density");
+    });
+  });
+
   describe("torque section", () => {
     it("renders avg and peak torque (legacy field names avg_nm/peak_nm)", () => {
       const out = renderTemplate(makeRide(), null, null);
@@ -418,6 +453,21 @@ describe("renderTemplate", () => {
     it("shows optimal cadence benchmark for run", () => {
       const out = renderTemplate(makeRun(), null, null);
       expect(out).toContain("170–180 spm");
+    });
+
+    it("uses stroke rate wording for paddle and skips cycling benchmark", () => {
+      const out = renderTemplate(makePaddle(), null, null);
+      expect(out).toContain("Stroke Rate");
+      expect(out).not.toContain("pro benchmark 85–95 rpm");
+    });
+  });
+
+  describe("paddle metrics section", () => {
+    it("renders paddle_analysis when available", () => {
+      const out = renderTemplate(makePaddle(), null, null);
+      expect(out).toContain("Paddle Metrics");
+      expect(out).toContain("Estimated Total Strokes");
+      expect(out).toContain("Distance Per Stroke");
     });
   });
 
@@ -552,6 +602,71 @@ describe("renderTemplate", () => {
     it("skips readiness section when wellness is null", () => {
       const out = renderTemplate(makeRide(), null, null);
       expect(out).not.toContain("READINESS");
+    });
+  });
+
+  describe("training recommendation section", () => {
+    it("renders deterministic recommendation block when provided", () => {
+      const out = renderTemplate(makeRide(), null, null, {
+        state: "cautious",
+        session_type: "recovery",
+        next_24h: "Easy aerobic / mobility",
+        next_72h: "Easy day then endurance",
+        suggested_next_session_tss_range: [25, 50],
+        session_plan: {
+          type: "aerobic_endurance",
+          duration_min_range: [45, 75],
+          intensity_hint: "Mostly Z2 with smooth cadence; avoid hard surges",
+          tss_target_range: [25, 50],
+        },
+        suggested_weekly_tss_range: [350, 420],
+        suggested_weekly_microcycle: [
+          { day: 1, intensity: "easy", note: "Aerobic maintenance" },
+          { day: 2, intensity: "rest", note: "Recovery focus" },
+          { day: 3, intensity: "easy", note: "Light workout" },
+          { day: 4, intensity: "rest", note: "Midweek break" },
+          { day: 5, intensity: "moderate", note: "Tempo session" },
+          { day: 6, intensity: "easy", note: "Easy spin" },
+          { day: 7, intensity: "rest", note: "Prep for next week" },
+        ],
+        recovery_eta_hours: 18.5,
+        rationale: ["Recovery signals are trending down"],
+        signals: ["Readiness is down vs 28d baseline"],
+        confidence: "high",
+        cause_codes: ["LOAD_HIGH", "HRV_DROP"],
+        quality_flags: ["GARMIN_DAYS_MISSING", "SLEEP_FIELDS_MISSING"],
+        confidence_factors: { coverage: 100, agreement: 84, stability: 78 },
+        changes: {
+          state_changed: true,
+          drivers: [
+            { key: "Readiness", delta: -6 },
+            { key: "HRV 7d delta", delta: -4, unit: "ms" },
+          ],
+        },
+      });
+      expect(out).toContain("TRAINING RECOMMENDATION");
+      expect(out).toContain("Easy aerobic / mobility");
+      expect(out).toContain("**Session archetype:** aerobic_endurance");
+      expect(out).toContain("**Session duration target:** 45-75 min");
+      expect(out).toContain("**7-Day Microcycle Plan:**");
+      expect(out).toContain("**Day 1:** EASY");
+      expect(out).toContain("**Day 5:** MODERATE");
+      expect(out).toContain("**Recovery ETA to balanced state:**");
+      expect(out).toContain("~18.5h");
+      expect(out).toContain("Readiness is down vs 28d baseline");
+      expect(out).toContain("Top drivers");
+      expect(out).toContain("High training load");
+      expect(out).toContain("HRV suppression");
+      expect(out).toContain("Driver details");
+      expect(out).toContain("High training load (LOAD_HIGH)");
+      expect(out).toContain("HRV suppression (HRV_DROP)");
+      expect(out).toContain("Confidence breakdown");
+      expect(out).toContain("Coverage: 100/100");
+      expect(out).toContain("Data quality");
+      expect(out).toContain("GARMIN_DAYS_MISSING, SLEEP_FIELDS_MISSING");
+      expect(out).toContain("What changed vs previous day");
+      expect(out).toContain("Readiness: -6");
+      expect(out).toContain("HRV 7d delta: -4 ms");
     });
   });
 

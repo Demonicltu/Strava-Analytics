@@ -16,6 +16,7 @@ You will receive a JSON object with:
 - `vo2max_trend`: list of `{ date, sport, vo2max }` (if Strava VO2max estimates are available)
 - `latest_activity`: compact summary of the most recent activity (date, sport, name, distance, HR, TSS, TRIMP, pace, power, hr_zones)
 - `latest_vs_period_avg`: deltas between latest activity and the period averages for that sport (hr_delta, pace_delta_sec, power_delta_w, trimp_delta)
+- `recommendation_snapshot` (optional): if present, a compact recommendation state for the latest activity (state, session_type, confidence, recovery_eta_hours, cause_codes)
 
 ## Output Format
 
@@ -63,6 +64,7 @@ Summarize the week-by-week table in 3-5 sentences. Call out the heaviest week, l
 Give exactly 3-5 concrete, prioritized recommendations based on the data:
 - Format: **[Priority: High/Medium/Low]** — Action. Why it matters based on the specific numbers.
 - Examples: "Add a Z2 long ride (>2h) — you've spent only 12% of time in Z2 this month"; "Recovery week needed — 3-week load trend is +45%, above the safe 10%/week ramp"
+- If `recommendation_snapshot` is present, use it to explain current readiness/load context in one bullet without repeating the whole object.
 
 ---
 
@@ -82,3 +84,4 @@ Give exactly 3-5 concrete, prioritized recommendations based on the data:
 - **Pace display:** convert `avg_pace_sec_per_km` to `M:SS/km` format. A negative `pace_delta_sec` = **faster** (improvement 🟢); positive = slower (regression 🔴 or deliberate easy day).
 - **HR delta:** negative = lower HR (aerobic efficiency 🟢); positive = higher HR (fatigue, heat, or harder effort — context matters).
 - **Missing data:** if a sport has no pace (e.g. cycling) or no power (e.g. running), skip those columns.
+- **Trend summary:** keep comparison language consistent with the output fields: faster/slower pace, lower/higher HR, stronger/weaker power, and stable/improving/declining recommendation state when provided.

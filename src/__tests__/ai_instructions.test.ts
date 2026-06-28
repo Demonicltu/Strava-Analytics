@@ -20,6 +20,7 @@ const SPLIT_INSTRUCTION_FILES = [
   "instructions/running.md",
   "instructions/walk.md",
   "instructions/surf.md",
+  "instructions/paddle.md",
   "instructions/workout.md",
   "instructions/devices/garmin.md",
 ] as const;
@@ -202,6 +203,16 @@ describe("instructions/surf.md — key content guards", () => {
   it("contains wave reference", () => expect(content).toMatch(/wave/i));
   it("contains paddle reference", () => expect(content).toMatch(/paddle/i));
   it("does NOT instruct to show cycling score", () => expect(content).not.toMatch(/amateur_score/i));
+});
+
+describe("instructions/paddle.md — key content guards", () => {
+  const content = existsSync(join(BASE_DIR, "instructions/paddle.md"))
+    ? readFileSync(join(BASE_DIR, "instructions/paddle.md"), "utf-8")
+    : "";
+
+  it("contains stroke rate reference", () => expect(content).toMatch(/stroke rate/i));
+  it("contains paddle efficiency reference", () => expect(content).toMatch(/distance per stroke|efficiency/i));
+  it("does NOT contain cycling cadence benchmark", () => expect(content).not.toMatch(/85-95\s*rpm/i));
 });
 
 describe("instructions/workout.md — key content guards", () => {

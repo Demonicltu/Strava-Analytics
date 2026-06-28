@@ -3,6 +3,7 @@
  * Used by both pre_analyze.ts and fast.ts.
  */
 import type { RiderConfig } from "./config.js";
+import { BENCHMARKS } from "./benchmarks.js";
 
 // ─── Helpers ───
 
@@ -94,6 +95,7 @@ export function crunchActivity(raw: any, rider: RiderConfig, garminRestHr?: numb
   const isRide = ["Ride", "VirtualRide", "EBikeRide", "GravelRide", "MountainBikeRide"].includes(summary.sport_type);
   const isRun = ["Run", "TrailRun", "VirtualRun"].includes(summary.sport_type);
   const isWalk = ["Walk", "Hike"].includes(summary.sport_type);
+  const isPaddle = ["StandUpPaddling", "Paddling", "Paddle"].includes(summary.sport_type);
   const isSurf = summary.sport_type === "Surfing";
   const isWorkout = ["Workout", "WeightTraining", "CrossFit", "Crossfit", "HIIT", "Yoga", "Pilates", "Rowing", "Elliptical", "StairStepper"].includes(summary.sport_type);
   const isVirtual = summary.sport_type === "VirtualRide";
@@ -147,8 +149,8 @@ export function crunchActivity(raw: any, rider: RiderConfig, garminRestHr?: numb
 
     if (hasPowerMeter && summary.average_watts) {
       // Power available → power is primary (50%)
-      primaryPct = round(summary.average_watts / 440 * 100);
-      metrics.power = `${Math.round(summary.average_watts)} / 440 W → ${primaryPct}%`;
+      primaryPct = round(summary.average_watts / BENCHMARKS.POGACAR_POWER_REF_W * 100);
+      metrics.power = `${Math.round(summary.average_watts)} / ${BENCHMARKS.POGACAR_POWER_REF_W} W → ${primaryPct}%`;
       // Speed shown as secondary when power is primary
       if (!isVirtual && summary.average_speed_kmh > 0) {
         const pct = round(summary.average_speed_kmh / speedRef * 100);
@@ -164,16 +166,14 @@ export function crunchActivity(raw: any, rider: RiderConfig, garminRestHr?: numb
     // (Updated from old 2.9 estimate which assumed 440W/150bpm — unrealistically low HR for race context)
     if (normalizedPower && avgHR > 0) {
       const ef = round(normalizedPower / avgHR, 2);
-      const pogacarEf = 2.3;
-      const pct = round(ef / pogacarEf * 100);
-      metrics.efficiency = `${ef} / ${pogacarEf} W/bpm → ${pct}%`;
+      const pct = round(ef / BENCHMARKS.POGACAR_EF_REF_W_PER_BPM * 100);
+      metrics.efficiency = `${ef} / ${BENCHMARKS.POGACAR_EF_REF_W_PER_BPM} W/bpm → ${pct}%`;
       secondaryPcts.push(pct);
     }
     if (elev > 200 && summary.moving_time_seconds > 0) {
       const vam = round(elev / (summary.moving_time_seconds / 3600));
-      const pogacarVam = 1900;
-      const pct = round(vam / pogacarVam * 100);
-      metrics.climbing = `${vam} / ${pogacarVam} VAM → ${pct}%`;
+      const pct = round(vam / BENCHMARKS.POGACAR_VAM_REF_M_PER_H * 100);
+      metrics.climbing = `${vam} / ${BENCHMARKS.POGACAR_VAM_REF_M_PER_H} VAM → ${pct}%`;
       secondaryPcts.push(pct);
     }
     let compositePct: number | null = null;
@@ -190,7 +190,7 @@ export function crunchActivity(raw: any, rider: RiderConfig, garminRestHr?: numb
   if (isRun && summary.average_speed_kmh > 0) {
     const paceSecPerKm = 3600 / summary.average_speed_kmh;
     // Pace component: Kipchoge marathon pace = 172 sec/km (2:52/km)
-    const pacePct = round(172 / paceSecPerKm * 100);
+    const pacePct = round(BENCHMARKS.KIPCHOGE_PACE_REF_SEC_PER_KM / paceSecPerKm * 100);
     const metrics: any = {};
     let total = pacePct, count = 1;
     metrics.pace = `${formatPace(summary.average_speed_kmh)} / 2:52/km → ${pacePct}%`;
@@ -199,7 +199,7 @@ export function crunchActivity(raw: any, rider: RiderConfig, garminRestHr?: numb
     // Kipchoge ref ≈ 172s/km at ~160 bpm → 1.075 s/km/bpm
     // If LTHR is set, use it as a personalized anchor instead of fixed 160
     const kipHrRef = effectiveLthr || 160;
-    const kipEconomy = round(172 / kipHrRef, 3);
+    const kipEconomy = round(BENCHMARKS.KIPCHOGE_PACE_REF_SEC_PER_KM / kipHrRef, 3);
     if (avgHR > 0) {
       const yourEconomy = round(paceSecPerKm / avgHR, 3);
       const econPct = round(kipEconomy / yourEconomy * 100);
@@ -210,8 +210,8 @@ export function crunchActivity(raw: any, rider: RiderConfig, garminRestHr?: numb
     // Cadence: Kipchoge runs ~180 spm. Only include if cadence data available.
     if (summary.average_cadence) {
       const avgSpm = round(summary.average_cadence * 2); // Strava = strides/min, double for spm
-      const cadPct = round(avgSpm / 180 * 100);
-      metrics.cadence = `${avgSpm} / 180 spm → ${cadPct}%`;
+      const cadPct = round(avgSpm / BENCHMARKS.KIPCHOGE_CADENCE_REF_SPM * 100);
+      metrics.cadence = `${avgSpm} / ${BENCHMARKS.KIPCHOGE_CADENCE_REF_SPM} spm → ${cadPct}%`;
       total += cadPct; count++;
     }
 
@@ -263,6 +263,8 @@ export function crunchActivity(raw: any, rider: RiderConfig, garminRestHr?: numb
     // Running cadence from Strava is in strides/min (one foot); display as spm (steps/min = 2x)
     if (isRun || isWalk) {
       summaryCard.cadence = `${round(summary.average_cadence * 2)} spm`;
+    } else if (isPaddle) {
+      summaryCard.cadence = `${round(summary.average_cadence)} spm`;
     } else {
       summaryCard.cadence = `${round(summary.average_cadence)} rpm`;
     }
@@ -353,6 +355,59 @@ export function crunchActivity(raw: any, rider: RiderConfig, garminRestHr?: numb
         avg_speed_kmh: w.avgSpeed,
       })),
     };
+  }
+
+  // ═══ Paddle Analysis ═══
+  let paddleAnalysis: any = null;
+  if (isPaddle) {
+    const avgSpeedKmh = typeof summary.average_speed_kmh === "number" ? summary.average_speed_kmh : null;
+    const paceSecPerKm = avgSpeedKmh && avgSpeedKmh > 0 ? round(3600 / avgSpeedKmh, 1) : null;
+    const movingDistanceM = typeof summary.distance_km === "number" ? summary.distance_km * 1000 : 0;
+
+    if (cadenceValues.length > 0) {
+      let estStrokes = 0;
+      let lastRate: number | null = null;
+      for (let i = 1; i < movingRows.length; i++) {
+        const prev = movingRows[i - 1];
+        const cur = movingRows[i];
+        const prevRate = typeof prev.cadence_rpm === "number" && prev.cadence_rpm > 0 ? prev.cadence_rpm : null;
+        const curRate = typeof cur.cadence_rpm === "number" && cur.cadence_rpm > 0 ? cur.cadence_rpm : null;
+        if (prevRate != null) lastRate = prevRate;
+        if (curRate != null) lastRate = curRate;
+        const rate = curRate ?? prevRate ?? lastRate;
+        if (!rate) continue;
+        const dtRaw = (cur.time_seconds ?? i) - (prev.time_seconds ?? (i - 1));
+        const dt = dtRaw > 0 ? dtRaw : 1;
+        estStrokes += (rate / 60) * dt;
+      }
+      const cadStats = computeStats(cadenceValues);
+      const strokeVarPct = cadStats && cadStats.avg > 0 ? round((cadStats.stddev / cadStats.avg) * 100, 1) : null;
+      const mid = Math.floor(cadenceValues.length / 2);
+      const h1 = cadenceValues.slice(0, mid);
+      const h2 = cadenceValues.slice(mid);
+      const h1Avg = h1.length > 0 ? round(h1.reduce((a, b) => a + b, 0) / h1.length, 1) : null;
+      const h2Avg = h2.length > 0 ? round(h2.reduce((a, b) => a + b, 0) / h2.length, 1) : null;
+
+      paddleAnalysis = {
+        avg_speed_kmh: avgSpeedKmh,
+        pace_sec_per_km: paceSecPerKm,
+        avg_stroke_rate_spm: cadStats ? round(cadStats.avg, 1) : null,
+        max_stroke_rate_spm: cadStats ? round(cadStats.max, 1) : null,
+        stroke_rate_variability_pct: strokeVarPct,
+        estimated_total_strokes: Math.max(0, Math.round(estStrokes)),
+        distance_per_stroke_m: estStrokes > 0 ? round(movingDistanceM / estStrokes, 2) : null,
+        stroke_rate_trend: h1Avg != null && h2Avg != null
+          ? { first_half_spm: h1Avg, second_half_spm: h2Avg, delta_spm: round(h2Avg - h1Avg, 1) }
+          : null,
+      };
+    } else {
+      paddleAnalysis = {
+        avg_speed_kmh: avgSpeedKmh,
+        pace_sec_per_km: paceSecPerKm,
+        estimated_total_strokes: null,
+        distance_per_stroke_m: null,
+      };
+    }
   }
 
   // ═══ Pacing ═══
@@ -519,6 +574,13 @@ export function crunchActivity(raw: any, rider: RiderConfig, garminRestHr?: numb
       const durationSec = summary.moving_time_seconds;
       const TSS = round((durationSec * normalizedPower * IF) / (effectiveFtp * 3600) * 100, 1);
       const EF = avgHR > 0 ? round(normalizedPower / avgHR, 2) : null;
+      const avgTempC = tempValues.length > 0
+        ? round(tempValues.reduce((a, b) => a + b, 0) / tempValues.length, 1)
+        : null;
+      const heatMultiplier = avgTempC != null && avgTempC > 25
+        ? Math.min(1 + ((avgTempC - 25) * 0.05), 1.35)
+        : 1;
+      const tssHeatAdjusted = round(TSS * heatMultiplier, 1);
 
       let tssInterpretation = "";
       if (TSS < 50) tssInterpretation = "Easy day — recovery ride";
@@ -542,6 +604,12 @@ export function crunchActivity(raw: any, rider: RiderConfig, garminRestHr?: numb
         intensity_factor_label: ifInterpretation,
         tss: TSS,
         tss_label: tssInterpretation,
+        tss_heat_adjusted: tssHeatAdjusted,
+        tss_heat_multiplier: round(heatMultiplier, 3),
+        tss_heat_adjustment: heatMultiplier > 1
+          ? `Heat-adjusted from ${TSS} to ${tssHeatAdjusted} (${avgTempC}°C avg, +5% per °C above 25, capped at +35%)`
+          : null,
+        avg_temperature_c: avgTempC,
         efficiency_factor: EF,
       };
     }
@@ -805,7 +873,7 @@ export function crunchActivity(raw: any, rider: RiderConfig, garminRestHr?: numb
         { zone: "Z4 (Threshold)", min: 0.93, max: 1.0   },
         { zone: "Z5 (VO2max+)",   min: 1.0,  max: 99    },
       ];
-      const sport = isRun ? "running" : "cycling";
+      const sport = isRun ? "running" : isPaddle ? "paddling" : "cycling";
       zoneModel = `LTHR-based/${sport} (${lthr} bpm)`;
       zoneData = zones.map(z => {
         const lower = Math.round(z.min * lthr);
@@ -849,7 +917,7 @@ export function crunchActivity(raw: any, rider: RiderConfig, garminRestHr?: numb
       section_header: isWalk
         ? `Heart Rate Zones (% of max HR/walking, ${effectiveMaxHr} bpm)`
         : effectiveLthr
-          ? `Heart Rate Zones (LTHR-based/${isRun ? "running" : "cycling"}, ${effectiveLthr} bpm)`
+          ? `Heart Rate Zones (LTHR-based/${isRun ? "running" : isPaddle ? "paddling" : "cycling"}, ${effectiveLthr} bpm)`
           : `Heart Rate Zones (% of max HR, ${effectiveMaxHr} bpm)`,
       lthr_used: effectiveLthr ?? null,
       max_hr_used: effectiveMaxHr ?? null,
@@ -913,6 +981,15 @@ export function crunchActivity(raw: any, rider: RiderConfig, garminRestHr?: numb
         { zone: "Sprint (18+ km/h)",          min: 18, max: 999 },
       ];
       speedZoneModel = "running";
+    } else if (isPaddle) {
+      bands = [
+        { zone: "Z1 Recovery Glide (0-3 km/h)", min: 0, max: 3 },
+        { zone: "Z2 Easy Endurance (3-5 km/h)", min: 3, max: 5 },
+        { zone: "Z3 Steady Paddle (5-6.5 km/h)", min: 5, max: 6.5 },
+        { zone: "Z4 Strong Effort (6.5-8 km/h)", min: 6.5, max: 8 },
+        { zone: "Z5 Sprint/Surf Assist (8+ km/h)", min: 8, max: 999 },
+      ];
+      speedZoneModel = "paddling";
     } else {
       bands = [
         { zone: "Stopped/Very Slow", min: 0,  max: 5  },
@@ -1015,6 +1092,45 @@ export function crunchActivity(raw: any, rider: RiderConfig, garminRestHr?: numb
       total_climbs_detected: climbs.length,
       climbs: climbs.slice(0, 10),
       best_vam_climb: bestClimb,
+    };
+  }
+
+  // ═══ Route Difficulty ═══
+  let routeDifficulty: any = null;
+  if (!isWorkout && !isSurf && summary.distance_km > 0) {
+    const ascentM = climbing?.total_ascent_m ?? elev ?? 0;
+    const distKm = summary.distance_km;
+    const ascentPerKm = distKm > 0 ? ascentM / distKm : 0;
+
+    const gradDist = gradientAnalysis?.distribution ?? [];
+    const steepPct = gradDist
+      .filter((g: any) => String(g.label).includes("Moderate uphill") || String(g.label).includes("Steep uphill"))
+      .reduce((s: number, g: any) => s + (g.pct ?? 0), 0);
+    const uphillPct = gradDist
+      .filter((g: any) => String(g.label).includes("Gentle uphill") || String(g.label).includes("Moderate uphill") || String(g.label).includes("Steep uphill"))
+      .reduce((s: number, g: any) => s + (g.pct ?? 0), 0);
+
+    const ascentScore = Math.min(100, round((ascentPerKm / 20) * 100, 1));
+    const steepScore = Math.min(100, round((steepPct / 25) * 100, 1));
+    const rollingScore = Math.min(100, round((uphillPct / 40) * 100, 1));
+    const score = round(ascentScore * 0.4 + steepScore * 0.35 + rollingScore * 0.25, 1);
+
+    const label = score < 25 ? "Easy"
+      : score < 50 ? "Moderate"
+      : score < 75 ? "Hard"
+      : "Very Hard";
+
+    routeDifficulty = {
+      score,
+      label,
+      components: {
+        ascent_density_m_per_km: round(ascentPerKm, 1),
+        steep_uphill_pct: round(steepPct, 1),
+        uphill_total_pct: round(uphillPct, 1),
+        ascent_score: ascentScore,
+        steep_score: steepScore,
+        terrain_score: rollingScore,
+      },
     };
   }
 
@@ -1418,6 +1534,13 @@ export function crunchActivity(raw: any, rider: RiderConfig, garminRestHr?: numb
         { zone: "Z4 Power (120-135 spm)",  min: 120, max: 135  },
         { zone: "Z5 Peak (135+ spm)",      min: 135, max: 9999 },
       ], cadenceValues, 2, "spm");
+    } else if (isPaddle) {
+      cadenceZones = mkCadZone([
+        { zone: "Z1 Easy (<35 spm)", min: 0, max: 35 },
+        { zone: "Z2 Steady (35-50 spm)", min: 35, max: 50 },
+        { zone: "Z3 Strong (50-65 spm)", min: 50, max: 65 },
+        { zone: "Z4 High Turnover (65+ spm)", min: 65, max: 9999 },
+      ], cadenceValues, 1, "spm");
     } else {
       cadenceZones = mkCadZone([
         { zone: "Z1 Grind (<70 rpm)",     min: 0,   max: 70   },
@@ -1630,6 +1753,10 @@ export function crunchActivity(raw: any, rider: RiderConfig, garminRestHr?: numb
         return { stats: spmStats, unit: "spm", pro_benchmark: "100-120 spm", is_low: spmStats.avg < 100 };
       }
 
+      if (isPaddle) {
+        return { stats, unit: "spm", pro_benchmark: null, is_low: false };
+      }
+
       return { stats, unit: "rpm", pro_benchmark: "85-95 rpm", is_low: stats.avg < 75 };
     })() : null,
     segments_summary: { total: segments.length, prs: prSegs.length, highlight_table: segTable },
@@ -1637,20 +1764,24 @@ export function crunchActivity(raw: any, rider: RiderConfig, garminRestHr?: numb
     laps: laps.length > 1 ? laps.map((l: any) => ({ lap: l.lap_index, distance_km: round(l.distance / 1000, 2), time: formatDuration(l.moving_time), speed_kmh: round(l.average_speed * 3.6), avg_hr: l.average_heartrate ? Math.round(l.average_heartrate) : null })) : null,
     five_minute_windows: timeWindows,
     // NEW ADVANCED METRICS
-    training_metrics: (isSurf || isWorkout) ? null : trainingMetrics,
+    training_metrics: (isSurf || isWorkout || isPaddle) ? null : trainingMetrics,
     relative_effort: relativeEffort,
-    aerobic_decoupling: (isSurf || isWorkout) ? null : aerobicDecoupling,
-    power_to_weight: (isSurf || isWorkout) ? null : powerToWeight,
-    power_skills: (isSurf || isWorkout) ? null : powerSkills,
-    torque: (isSurf || isWorkout) ? null : torque,
+    aerobic_decoupling: (isSurf || isWorkout || isPaddle) ? null : aerobicDecoupling,
+    power_to_weight: (isSurf || isWorkout || isPaddle) ? null : powerToWeight,
+    power_skills: (isSurf || isWorkout || isPaddle) ? null : powerSkills,
+    torque: (isSurf || isWorkout || isPaddle) ? null : torque,
     training_zones: isSurf
       ? (trainingZones ? { hr_zones: trainingZones.hr_zones, power_zones: null, speed_zones: null } : null)
+      : isPaddle
+        ? (trainingZones ? { hr_zones: trainingZones.hr_zones, power_zones: null, speed_zones: trainingZones.speed_zones ?? null, cadence_zones: trainingZones.cadence_zones ?? null } : null)
       : isWorkout
         ? (trainingZones ? { hr_zones: trainingZones.hr_zones, power_zones: null, speed_zones: null, cadence_zones: trainingZones.cadence_zones ?? null } : null)
         : trainingZones,
-    gradient_analysis: (isSurf || isWorkout) ? null : gradientAnalysis,
-    vam_analysis: (isSurf || isWorkout) ? null : vamAnalysis,
+    gradient_analysis: (isSurf || isWorkout || isPaddle) ? null : gradientAnalysis,
+    vam_analysis: (isSurf || isWorkout || isPaddle) ? null : vamAnalysis,
     workout_analysis: isWorkout ? workoutAnalysis : null,
+    paddle_analysis: isPaddle ? paddleAnalysis : null,
+    route_difficulty: routeDifficulty,
     heart_points: heartPoints,
     vo2max,
     meteorology: meteo,

@@ -9,9 +9,11 @@ import { join } from "node:path";
 /** Map Strava sport types to instruction file names */
 function activityTypeToFile(type: string): string {
   const t = (type || "").toLowerCase();
+  const compact = t.replace(/[^a-z0-9]/g, "");
   if (["ride", "virtualride", "gravelride", "mountainbikeride", "ebikeride", "handcycle"].some(k => t.includes(k.toLowerCase()))) return "cycling";
   if (["run", "virtualrun", "trailrun"].some(k => t.includes(k.toLowerCase()))) return "running";
   if (["walk", "hike", "hiking"].some(k => t.includes(k.toLowerCase()))) return "walk";
+  if (["standuppaddling", "stand up paddling", "sup", "paddle", "paddling"].some(k => t.includes(k) || compact.includes(k.replace(/[^a-z0-9]/g, "")))) return "paddle";
   if (["surf", "windsurf", "kitesurf", "standup"].some(k => t.includes(k.toLowerCase()))) return "surf";
   if (["workout", "weighttraining", "crosstraining", "hiit", "yoga", "pilates", "stretch"].some(k => t.includes(k.toLowerCase()))) return "workout";
   return "workout"; // safe default for unknown indoor types
@@ -22,7 +24,8 @@ function deviceToFile(deviceName: string | null | undefined): string | null {
   if (!deviceName) return null;
   const d = deviceName.toLowerCase();
   if (d.includes("garmin") || d.includes("fenix") || d.includes("edge") || d.includes("forerunner") || d.includes("vivoactive")) return "garmin";
-  // Future: apple, samsung, wahoo, polar, suunto, coros
+  if (d.includes("samsung") || d.includes("galaxy")) return "samsung";
+  // Future: apple, wahoo, polar, suunto, coros
   return null;
 }
 

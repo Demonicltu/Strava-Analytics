@@ -6,14 +6,17 @@
  * Usage: npm run dashboard
  */
 import { writeFileSync, existsSync, readFileSync, readdirSync } from "fs";
-import { join, dirname } from "path";
-import { fileURLToPath } from "url";
+import { join } from "path";
 import "dotenv/config";
 import { loadAllSummaries, round2, sum, ActivitySummary } from "./summary_utils.js";
+import { buildDailyLoadSeries, computeLoadModel } from "./training_intelligence.js";
+import { resolveBaseDir } from "./paths.js";
+import { buildActivityRecommendation, loadWellnessByDate } from "./activity_recommendation.js";
+import type { RecommendationBlock } from "./recommendations.js";
+import { loadRecommendationHistory, computeTrend } from "./recommendation_history.js";
+import { CAUSE_CODE_META } from "./cause_codes.js";
 
-let __dirname2: string;
-try { __dirname2 = dirname(fileURLToPath(import.meta.url)); } catch { __dirname2 = process.cwd(); }
-const BASE_DIR = existsSync(join(__dirname2, "..", "package.json")) ? join(__dirname2, "..") : process.cwd();
+const BASE_DIR = resolveBaseDir(import.meta.url);
 const ANALYSIS_DIR = join(BASE_DIR, "analysis");
 const OUTPUT_PATH = join(BASE_DIR, "dashboard.html");
 
@@ -30,6 +33,15 @@ function buildHtml(summaries: ActivitySummary[]): string {
   if (summaries.length === 0) return `<!DOCTYPE html><html lang="en"><body>No data found.</body></html>`;
 
   const sorted = [...summaries].sort((a, b) => a.date.localeCompare(b.date));
+  const modelSeries = computeLoadModel(buildDailyLoadSeries(sorted));
+  const wellnessByDate = loadWellnessByDate(ANALYSIS_DIR);
+  const recommendationByDate = new Map<string, RecommendationBlock>();
+  const recHistory = loadRecommendationHistory(ANALYSIS_DIR);
+  for (const d of [...new Set(sorted.map(a => a.date))].sort()) {
+    const rec = buildActivityRecommendation(sorted, wellnessByDate, d);
+    if (rec) recommendationByDate.set(d, rec);
+  }
+  const recTrend = recHistory.length > 0 ? computeTrend(recHistory, 28) : null;
 
   // ── Load per-activity detail from crunched files ─────────────────
   const detailMap: Record<string, any> = {};
@@ -100,10 +112,12 @@ function buildHtml(summaries: ActivitySummary[]): string {
   const tgtKm    = process.env["WEEKLY_TARGET_KM"]    ? parseFloat(process.env["WEEKLY_TARGET_KM"])    : null;
   const tgtHours = process.env["WEEKLY_TARGET_HOURS"] ? parseFloat(process.env["WEEKLY_TARGET_HOURS"]) : null;
 
-  // Garmin wellness
-  const wellnessPath = join(ANALYSIS_DIR, "garmin_wellness.json");
+  // Wellness data (Garmin or Samsung)
+  const garminPath = join(ANALYSIS_DIR, "garmin_wellness.json");
+  const samsungPath = join(ANALYSIS_DIR, "samsung_wellness.json");
+  const wellnessPath = existsSync(garminPath) ? garminPath : existsSync(samsungPath) ? samsungPath : null;
   let wellnessRaw: Record<string, any> = {};
-  if (existsSync(wellnessPath)) {
+  if (wellnessPath) {
     try { wellnessRaw = JSON.parse(readFileSync(wellnessPath, "utf-8")); } catch { /* ignore */ }
   }
   const hasWellness = Object.keys(wellnessRaw).length > 0;
@@ -160,6 +174,12 @@ function buildHtml(summaries: ActivitySummary[]): string {
   .chart-box-wide { background: #1c1f2e; border-radius: 12px; padding: 20px; margin-bottom: 16px; }
   .chart-box-wide canvas { max-height: 200px; width: 100% !important; }
   .charts-col { display: flex; flex-direction: column; gap: 0; }
+  .explain-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 10px; margin-top: 10px; }
+  .explain-card { background: #161925; border: 1px solid #2a2e3f; border-radius: 10px; padding: 10px 12px; }
+  .explain-card .k { color: #777; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 4px; }
+  .explain-card .v { color: #e0e0e0; font-size: 0.95rem; font-weight: 600; }
+  .explain-list { margin-top: 10px; color: #bbb; font-size: 0.9rem; }
+  .explain-list li { margin: 4px 0; }
   @media (max-width: 600px) { .charts-row { grid-template-columns: 1fr; } .stat-card .val { font-size: 1.5rem; } }
 
   /* ── Activity detail modal ── */
@@ -226,6 +246,17 @@ function buildHtml(summaries: ActivitySummary[]): string {
 </div>
 
 <div class="section">
+  <h2>🧠 Recommendation Explainability</h2>
+  <div class="chart-box"><div id="recExplain" style="color:#888;">No recommendation data for this period.</div></div>
+</div>
+${recTrend ? `
+<div class="section">
+  <h2>📊 Recommendation Trend (28d)</h2>
+  <div class="chart-box"><div id="recTrend" style="color:#888;">Loading trend...</div></div>
+</div>
+` : ''}
+
+<div class="section">
   <h2>📏 Weekly Volume & Load</h2>
   <div class="charts-row">
     <div class="chart-box"><canvas id="weekDistChart"></canvas></div>
@@ -236,9 +267,23 @@ function buildHtml(summaries: ActivitySummary[]): string {
 </div>
 
 <div class="section">
+  <h2>⚖️ Fitness / Fatigue / Form (CTL/ATL/TSB)</h2>
+  <div class="charts-row">
+    <div class="chart-box" style="grid-column: 1 / -1;"><canvas id="loadModelChart" style="max-height:300px;"></canvas></div>
+  </div>
+</div>
+
+<div class="section">
   <h2>❤️ Heart Rate Zone Distribution (weekly avg)</h2>
   <div class="charts-row">
     <div class="chart-box" style="grid-column: 1 / -1;"><canvas id="zoneChart" style="max-height:300px;"></canvas></div>
+  </div>
+</div>
+
+<div class="section">
+  <h2>🧭 Training Zones Progression (monthly)</h2>
+  <div class="charts-row">
+    <div class="chart-box" style="grid-column: 1 / -1;"><canvas id="zoneProgressChart" style="max-height:300px;"></canvas></div>
   </div>
 </div>
 
@@ -269,20 +314,24 @@ const ALL_ACTS = ${toJs(sorted.map(a => ({
   pace: a.pace_sec_per_km, power: a.normalized_power ?? a.avg_power_w,
   zones: a.hr_zone_pct,
   zoneSec: a.hr_zone_sec,
+  rec: recommendationByDate.get(a.date) ?? null,
 }))
 )};
 
 const DETAIL = ${toJs(detailMap)};
+const MODEL_SERIES = ${toJs(modelSeries)};
 const WELLNESS = ${toJs(wellnessRaw)};
 const TGT_KM    = ${tgtKm ?? 'null'};
 const TGT_HOURS = ${tgtHours ?? 'null'};
 const COLORS = ${toJs(COLORS)};
+const CAUSE_META = ${toJs(CAUSE_CODE_META)};
 const sportColor = s => COLORS[s] || '#95a5a6';
 
 // ── Helpers ───────────────────────────────────────────────────────
 function r2(v) { return v != null ? Math.round(v * 100) / 100 : null; }
 function fmtPace(s) { return Math.floor(s/60)+':'+(String(Math.round(s%60)).padStart(2,'0')); }
 function fmtTime(s) { const h=Math.floor(s/3600),m=Math.floor((s%3600)/60),sec=s%60; return h>0?h+'h '+m+'m':m+'m '+sec+'s'; }
+function esc(v){return String(v).replace(/[&<>\"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;',"'":'&#39;'}[c]));}
 
 /** Rolling average dataset — takes array of {x,y} points, returns smoothed dataset config */
 function rollingAvg(data, window, color, label) {
@@ -418,6 +467,82 @@ function buildWeekMap(acts) {
   return Object.entries(m).sort(([a],[b]) => a.localeCompare(b));
 }
 
+function buildMonthMap(acts) {
+  const m = {};
+  for (const a of acts) {
+    const month = String(a.date).slice(0, 7);
+    if (!m[month]) m[month] = { zoneSec: {}, acts: 0 };
+    m[month].acts++;
+    if (a.zoneSec) {
+      for (const z of ['z1','z2','z3','z4','z5']) {
+        m[month].zoneSec[z] = (m[month].zoneSec[z] || 0) + (a.zoneSec[z] || 0);
+      }
+    }
+  }
+  return Object.entries(m).sort(([a], [b]) => a.localeCompare(b));
+}
+
+function explainHint(rec) {
+  if (!rec) return 'No recommendation available.';
+  if (rec.state === 'fatigued') return 'To move up: raise readiness/sleep and reduce short-term load spike.';
+  if (rec.state === 'cautious') return 'To move up: improve recovery signals and keep next 24-48h easy.';
+  if (rec.state === 'balanced') return 'To move up: maintain stable recovery and nudge freshness slightly positive.';
+  return 'To stay fresh: protect sleep/HRV and avoid stacking hard days.';
+}
+
+function renderExplainability(acts) {
+  const el = document.getElementById('recExplain');
+  if (!el) return;
+  if (!acts.length) { el.innerHTML = '<span style="color:#888;">No activities in selected period.</span>'; return; }
+  const latest = acts.slice().sort((a,b)=>a.date.localeCompare(b.date))[acts.length - 1];
+  const rec = latest?.rec;
+  if (!rec) { el.innerHTML = '<span style="color:#888;">No recommendation data for latest activity in this period.</span>'; return; }
+
+  const causes = (rec.cause_codes || []).slice(0, 8)
+    .map(function (code) {
+      const meta = CAUSE_META[code] || { rank: 99, label: code, description: 'No description available' };
+      return { code: code, rank: meta.rank, label: meta.label, text: meta.description };
+    })
+    .sort(function (a, b) { return a.rank - b.rank; });
+  const drivers = (rec.changes?.drivers || []).slice(0, 3).map(function (d) {
+    const sign = d.delta > 0 ? '+' : '';
+    return esc(d.key) + ': ' + sign + d.delta + (d.unit ? ' ' + esc(d.unit) : '');
+  });
+  const quality = rec.quality_flags || [];
+  const f = rec.confidence_factors || {};
+  const eta = rec.recovery_eta_hours != null ? (function() {
+    const d = Math.floor(rec.recovery_eta_hours / 24);
+    const h = Math.round((rec.recovery_eta_hours % 24) * 10) / 10;
+    return d > 0 ? d + 'd ' + h + 'h' : h + 'h';
+  })() : null;
+
+  const cards =
+    '<div class="explain-grid">'
+    + '<div class="explain-card"><div class="k">State</div><div class="v">' + esc(rec.state.toUpperCase()) + '</div></div>'
+    + '<div class="explain-card"><div class="k">Session</div><div class="v">' + esc(rec.session_type.toUpperCase()) + '</div></div>'
+    + '<div class="explain-card"><div class="k">Confidence</div><div class="v">' + esc(rec.confidence.toUpperCase()) + '</div></div>'
+    + '<div class="explain-card"><div class="k">Coverage / Agreement / Stability</div><div class="v">'
+    + (f.coverage ?? '—') + ' / ' + (f.agreement ?? '—') + ' / ' + (f.stability ?? '—')
+    + '</div></div>'
+    + (eta ? '<div class="explain-card"><div class="k">Recovery ETA</div><div class="v">~' + eta + '</div></div>' : '')
+    + '</div>';
+  const causesHtml = causes.length
+    ? '<ul class="explain-list"><li><b>Driver ranking (strongest to weakest):</b></li>'
+      + causes.map(function (c, idx) {
+        return '<li>#' + (idx + 1) + ' ' + esc(c.label) + ' - ' + esc(c.text) + ' <span style="color:#666;">(' + esc(c.code) + ')</span></li>';
+      }).join('')
+      + '</ul>'
+    : '';
+  const driversHtml = drivers.length
+    ? '<ul class="explain-list">' + drivers.map(function (d) { return '<li>' + d + '</li>'; }).join('') + '</ul>'
+    : '<div class="explain-list">No major day-over-day drivers.</div>';
+  const qualityHtml = quality.length
+    ? '<ul class="explain-list"><li><b>Data quality flags:</b> ' + quality.map(esc).join(', ') + '</li></ul>'
+    : '';
+  const hintHtml = '<div class="explain-list"><b>What would change state:</b> ' + esc(explainHint(rec)) + '</div>';
+  el.innerHTML = cards + causesHtml + driversHtml + qualityHtml + hintHtml;
+}
+
 // ── Chart registry ────────────────────────────────────────────────
 const charts = {};
 function upsert(id, type, data, options) {
@@ -442,12 +567,16 @@ function render(days) {
   const totalElev = Math.round(acts.reduce((s,a)=>s+a.elev,0));
   const totalLoad = Math.round(acts.reduce((s,a)=>s+(a.trimp||a.tss||0),0));
   const weekMap   = buildWeekMap(acts);
+  const monthMap  = buildMonthMap(acts);
+  const cutoffDate = days ? (()=>{ const d=new Date(); d.setDate(d.getDate()-days); return d.toISOString().slice(0,10); })() : null;
+  const modelPts = cutoffDate ? MODEL_SERIES.filter(p => p.date >= cutoffDate) : MODEL_SERIES;
   document.getElementById('statActs').textContent  = acts.length;
   document.getElementById('statDist').textContent  = totalDist?.toLocaleString();
   document.getElementById('statTime').textContent  = totalTime?.toLocaleString();
   document.getElementById('statElev').textContent  = totalElev?.toLocaleString();
   document.getElementById('statLoad').textContent  = totalLoad?.toLocaleString();
   document.getElementById('statWeeks').textContent = weekMap.length;
+  renderExplainability(acts);
 
   const wLabels = weekMap.map(([w])=>w);
   const wDist   = weekMap.map(([,d])=>r2(d.dist));
@@ -461,6 +590,18 @@ function render(days) {
   upsert('weekLoadChart','bar',{ labels:wLabels, datasets:[{ label:'Load (TRIMP/TSS)', data:wLoad, backgroundColor:'#e74c3c' }] },{ ...base, plugins:{...base.plugins,title:{display:true,text:'Weekly Training Load',color:'#ccc'}}, scales:{x:catX,y:yAxis} });
   upsert('weekTimeChart','bar',{ labels:wLabels, datasets:[{ label:'Time (h)', data:wTime, backgroundColor:'#2ecc71' }, ...tgtHrDs] },{ ...base, plugins:{...base.plugins,title:{display:true,text:'Weekly Moving Time (h)',color:'#ccc'}}, scales:{x:catX,y:yAxis} });
   upsert('weekElevChart','bar',{ labels:wLabels, datasets:[{ label:'Elevation (m)', data:wElev, backgroundColor:'#f39c12' }] },{ ...base, plugins:{...base.plugins,title:{display:true,text:'Weekly Elevation (m)',color:'#ccc'}}, scales:{x:catX,y:yAxis} });
+
+  upsert('loadModelChart','line',{
+    datasets:[
+      { label:'CTL (Fitness)', data:modelPts.map(p=>({x:p.date,y:p.ctl})), borderColor:'#3498db', backgroundColor:'rgba(52,152,219,0.1)', pointRadius:0, tension:0.25, fill:false },
+      { label:'ATL (Fatigue)', data:modelPts.map(p=>({x:p.date,y:p.atl})), borderColor:'#e74c3c', backgroundColor:'rgba(231,76,60,0.1)', pointRadius:0, tension:0.25, fill:false },
+      { label:'TSB (Form)', data:modelPts.map(p=>({x:p.date,y:p.tsb})), borderColor:'#2ecc71', backgroundColor:'rgba(46,204,113,0.08)', pointRadius:0, tension:0.25, fill:false },
+    ]
+  },{
+    ...base,
+    plugins:{...base.plugins,title:{display:true,text:'Banister model (EWMA): CTL 42d, ATL 7d, TSB = CTL - ATL',color:'#ccc'}},
+    scales:{x:timeX,y:yAxis}
+  });
 
   const zoneColors= ['#2ecc71','#3498db','#f39c12','#e67e22','#e74c3c'];
   // Time-weighted zone %: sum zone seconds per week, divide by total zone seconds → each week = 100%
@@ -481,6 +622,26 @@ function render(days) {
       tooltip:{callbacks:{label:ctx=>ctx.dataset.label+': '+ctx.parsed.y+'%'}}
     },
     scales:{x:{...catX,stacked:true},y:{...yStacked,max:100,ticks:{...yAxis.ticks,callback:v=>v+'%'}}}
+  });
+
+  const monthLabels = monthMap.map(([m]) => m);
+  const monthZones = [1,2,3,4,5].map((n, i) => ({
+    label: ['Z1 Recovery','Z2 Endurance','Z3 Tempo','Z4 Threshold','Z5 VO2max'][i],
+    data: monthMap.map(([, d]) => {
+      const total = ['z1','z2','z3','z4','z5'].reduce((s, z) => s + (d.zoneSec[z] || 0), 0);
+      return total > 0 ? Math.round((d.zoneSec['z' + n] || 0) / total * 1000) / 10 : 0;
+    }),
+    backgroundColor: zoneColors[i],
+  }));
+
+  upsert('zoneProgressChart', 'bar', { labels: monthLabels, datasets: monthZones }, {
+    ...base,
+    plugins: {
+      ...base.plugins,
+      title: { display: true, text: 'Monthly HR Zone progression (% of in-zone time)', color: '#ccc' },
+      tooltip: { callbacks: { label: ctx => ctx.dataset.label + ': ' + ctx.parsed.y + '%' } },
+    },
+    scales: { x: { ...catX, stacked: true }, y: { ...yStacked, max: 100, ticks: { ...yAxis.ticks, callback: v => v + '%' } } },
   });
 
   const hrData = acts.filter(a=>a.avgHr).map(a=>({ x:a.date, y:a.avgHr, name:a.name, id:a.id }));
@@ -521,8 +682,8 @@ function render(days) {
   // Wellness charts
   if (Object.keys(WELLNESS).length) {
     const wDates = Object.keys(WELLNESS).sort();
-    const cutoffDate = days ? (()=>{ const d=new Date(); d.setDate(d.getDate()-days); return d.toISOString().slice(0,10); })() : wDates[0];
-    const filtW  = wDates.filter(d=>d>=cutoffDate);
+    const wellnessCutoff = cutoffDate ?? wDates[0];
+    const filtW  = wDates.filter(d=>d>=wellnessCutoff);
     const W = 7; // rolling window
     const wOpts = (title, extraScales) => ({ ...base, plugins:{...base.plugins,title:{display:true,text:title,color:'#ccc'}}, scales:{x:timeX,y:yAxis,...(extraScales||{})} });
 
@@ -659,6 +820,12 @@ async function main() {
   if (summaries.length === 0) { console.error("❌ No crunched files. Run 'npm run bulk' first."); process.exit(1); }
 
   console.log(`✅ Loaded ${summaries.length} activities`);
+
+  const trainingDaily = buildDailyLoadSeries(summaries);
+  const loadModel = computeLoadModel(trainingDaily);
+  writeFileSync(join(ANALYSIS_DIR, "training_daily.json"), JSON.stringify({ updated_at: new Date().toISOString(), days: trainingDaily }, null, 2), "utf-8");
+  writeFileSync(join(ANALYSIS_DIR, "training_load_model.json"), JSON.stringify({ updated_at: new Date().toISOString(), model: loadModel }, null, 2), "utf-8");
+  console.log(`✅ Training intelligence cache saved: training_daily.json, training_load_model.json`);
 
   const html = buildHtml(summaries);
   writeFileSync(OUTPUT_PATH, html, "utf-8");

@@ -18,6 +18,7 @@ describe("groupSport", () => {
     ["Run", "Run"], ["TrailRun", "Run"], ["VirtualRun", "Run"],
     ["Ride", "Ride"], ["GravelRide", "Ride"], ["VirtualRide", "Ride"],
     ["Walk", "Walk"], ["Hike", "Walk"],
+    ["StandUpPaddling", "Paddle"],
     ["Swim", "Swim"], ["OpenWaterSwim", "Swim"],
     ["WeightTraining", "Strength"], ["Yoga", "Strength"],
     ["Surfing", "Surfing"],    // falls through to raw type
@@ -200,6 +201,9 @@ function makeSummary(date: string, overrides: Partial<ActivitySummary> = {}): Ac
     z2_pct: 40,
     best_20min_power_w: 230,
     aerobic_decoupling_pct: 4.2,
+    tss_is_hr_based: false,
+    vi_is_pace_based: false,
+    decoupling_is_drift: false,
     ...overrides,
   };
 }
