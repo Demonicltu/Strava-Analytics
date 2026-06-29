@@ -1,6 +1,18 @@
 import { describe, it, expect } from "vitest";
 import { buildDescription, buildPrivateNotes } from "../format.js";
 
+function withEnv<T>(key: string, value: string | undefined, run: () => T): T {
+  const prev = process.env[key];
+  if (value == null) delete process.env[key];
+  else process.env[key] = value;
+  try {
+    return run();
+  } finally {
+    if (prev == null) delete process.env[key];
+    else process.env[key] = prev;
+  }
+}
+
 // ─── Shared fixtures ───
 
 function makeRideCrunched(overrides: Record<string, any> = {}) {
@@ -117,7 +129,7 @@ describe("buildDescription — Ride (no AI)", () => {
 });
 
 describe("buildDescription — Ride (with AI text)", () => {
-  const aiText = `## Performance Verdict\nGreat ride today!\n\n## Training Zones\nZ2: 40%\n\n## 4.2 Heart Rate Analysis\nAvg: 155 bpm\n`;
+  const aiText = `## Performance Verdict\nGreat ride today!\n\n## Training Zones\nZ2: 40%\n\n## Readiness\nSleep: 71/100\n\n## Training Recommendation\nState: Balanced\n\n## Historical Context\nStable block\n\n## Heart Rate Analysis\nAvg: 155 bpm\n\n## Cadence Analysis\nSmooth pedaling\n\n## Climbing Analysis\nStrong climbing today\n\n## Gradient Distribution\nMostly flat terrain\n\n## VAM (Velocity Ascended in Meters per hour)\n820 VAM\n\n## Pacing Analysis\nEven pacing\n\n## Segment Highlights\nLocal KOM attempt\n\n## Actionable Tips\n- Watch your cadence on climbs\n`;
 
   it("extracts Performance Verdict from AI text", () => {
     const out = buildDescription(makeRideCrunched(), aiText);
@@ -130,10 +142,84 @@ describe("buildDescription — Ride (with AI text)", () => {
     expect(out).toContain("🎯 TRAINING ZONES");
   });
 
-  it("hides no-AI fallback sections when AI text present", () => {
+  it("keeps public performance sections in description by default", () => {
     const out = buildDescription(makeRideCrunched(), aiText);
-    // No-AI pacing section should use AI text path — pacing section only shows with no-AI
-    expect(out).not.toContain("📈 PACING");
+    expect(out).toContain("❤️ HEART RATE");
+    expect(out).toContain("🔄 CADENCE");
+    expect(out).toContain("⛰️ CLIMBING");
+    expect(out).toContain("📐 GRADIENT & VAM");
+    expect(out).toContain("📈 PACING");
+    expect(out).toContain("🏅 SEGMENT");
+  });
+
+  it("hides raw fallback pacing details when AI text present", () => {
+    const out = buildDescription(makeRideCrunched(), aiText);
+    expect(out).not.toContain("1st half:");
+    expect(out).not.toContain("2nd half:");
+  });
+
+  it("keeps readiness and recommendation out of public description", () => {
+    const out = buildDescription(makeRideCrunched(), aiText);
+    expect(out).not.toContain("🛌 READINESS");
+    expect(out).not.toContain("🧭 TRAINING RECOMMENDATION");
+  });
+
+  it("moves public performance sections to private notes in strict mode", () => {
+    withEnv("STRAVA_CONTENT_POLICY", "strict", () => {
+      const desc = buildDescription(makeRideCrunched(), aiText);
+      const notes = buildPrivateNotes(makeRideCrunched(), aiText);
+      // Public has full narrative but NO detailed sections
+      expect(desc).toContain("📊 RIDE SUMMARY");
+      expect(desc).toContain("📈 PERFORMANCE VERDICT");
+      expect(desc).not.toContain("❤️ HEART RATE");
+      expect(desc).not.toContain("📈 PACING");
+      expect(desc).not.toContain("🎯 TRAINING ZONES");
+      // Segments always in public
+      expect(desc).toContain("🏅 SEGMENT");
+      // Private has full performance detail
+      expect(notes).toContain("❤️ HEART RATE");
+      expect(notes).toContain("🔄 CADENCE");
+      expect(notes).toContain("📐 GRADIENT & VAM");
+      // Private has separators and correct structure
+      expect(notes).toContain("📋 KEY STATS");
+      expect(notes).toContain("💡 TIPS");
+      expect(notes).toContain("📈 HISTORICAL CONTEXT");
+    });
+  });
+
+  it("mirror mode reorders public flow and keeps backend summary de-duplicated", () => {
+    withEnv("STRAVA_CONTENT_POLICY", "mirror", () => {
+      const crunched = makeRideCrunched({
+        heart_points: { points: 45, pct_of_weekly_target: "30%", moderate_minutes: 18, vigorous_minutes: 14 },
+        route_difficulty: { score: 66.1, label: "Hard", components: { ascent_density_m_per_km: 15.7 } },
+      });
+
+      const desc = buildDescription(crunched, aiText);
+      const notes = buildPrivateNotes(crunched, aiText);
+
+      expect(desc).toContain("⚙️ ADVANCED METRICS");
+      expect(desc).toContain("💚 HEART POINTS");
+      expect(desc).toContain("🧭 ROUTE DIFFICULTY");
+      expect(desc).toContain("📈 PERFORMANCE VERDICT");
+      expect(desc).toContain("🎯 TRAINING ZONES");
+      expect(desc).toContain("❤️ HEART RATE");
+      expect(desc).toContain("🏅 SEGMENT");
+
+      expect(desc.indexOf("⚙️ ADVANCED METRICS")).toBeLessThan(desc.indexOf("💚 HEART POINTS"));
+      expect(desc.indexOf("💚 HEART POINTS")).toBeLessThan(desc.indexOf("🧭 ROUTE DIFFICULTY"));
+      expect(desc.indexOf("🧭 ROUTE DIFFICULTY")).toBeLessThan(desc.indexOf("📈 PERFORMANCE VERDICT"));
+      expect(desc.indexOf("📈 PERFORMANCE VERDICT")).toBeLessThan(desc.indexOf("🎯 TRAINING ZONES"));
+      expect(desc.indexOf("🎯 TRAINING ZONES")).toBeLessThan(desc.indexOf("❤️ HEART RATE"));
+      expect(desc.indexOf("🌤️ WEATHER & WIND")).toBeLessThan(desc.indexOf("🏅 SEGMENT"));
+
+      expect(notes.startsWith(desc)).toBe(true);
+      const backend = notes.split("📋 BACKEND SUMMARY")[1] ?? "";
+      expect(backend).toContain("🛌 READINESS DETAILS");
+      expect(backend).toContain("🧭 TRAINING RECOMMENDATION");
+      expect(backend).toContain("📈 HISTORICAL CONTEXT");
+      expect(backend).not.toContain("🎯 INTENSITY ZONES");
+      expect(backend).not.toContain("❤️ HEART RATE");
+    });
   });
 });
 
@@ -320,6 +406,26 @@ describe("buildPrivateNotes", () => {
     const out = buildPrivateNotes(makeRideCrunched(), aiText);
     expect(out).toContain("💡 TIPS");
     expect(out).toContain("cadence");
+  });
+
+  it("includes AI readiness and recommendation in private notes", () => {
+    const aiText = `## Readiness\nSleep: 80/100\n\n## Training Recommendation\nState: Balanced\n\n## Historical Context\nStable training block`;
+    const out = buildPrivateNotes(makeRideCrunched(), aiText);
+    expect(out).toContain("🛌 READINESS");
+    expect(out).toContain("🧭 TRAINING RECOMMENDATION");
+    expect(out).toContain("📈 HISTORICAL CONTEXT");
+  });
+
+  it("balanced mode keeps KEY STATS first, then TIPS, and excludes SEGMENT in private notes", () => {
+    const aiText = `## Actionable Tips\n- 🔄 Work on cadence\n\n## Readiness\nSleep: 80/100\n\n## Training Recommendation\nState: Balanced\n\n## Historical Context\nStable training block\n\n## Segment Highlights\nPR on local climb`;
+    const out = buildPrivateNotes(makeRideCrunched(), aiText);
+    const keyStatsPos = out.indexOf("📋 KEY STATS");
+    const tipsPos = out.indexOf("💡 TIPS");
+    const readinessPos = out.indexOf("🛌 READINESS");
+    expect(keyStatsPos).toBeGreaterThanOrEqual(0);
+    expect(tipsPos).toBeGreaterThan(keyStatsPos);
+    expect(readinessPos).toBeGreaterThan(tipsPos);
+    expect(out).not.toContain("🏅 SEGMENT");
   });
 
   it("filters segment/PR tips from AI text", () => {

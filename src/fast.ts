@@ -110,16 +110,16 @@ async function runFetchStep(
   const streamTable = buildStreamTable(enriched);
 
   const isIndoor = ["VirtualRide", "VirtualRun"].includes(enriched.activity.sport_type) || (enriched.activity as any).trainer === true;
-  const fallbackLatLng = enriched.activity.start_latlng ?? null;
-  const waypoints = isIndoor ? [] : buildWeatherWaypoints(
+  const fallbackLatLng: [number, number] | null = enriched.activity.start_latlng ?? null;
+  const waypoints = buildWeatherWaypoints(
     streamTable as any[],
     enriched.activity.start_date,
     fallbackLatLng,
     enriched.activity.moving_time,
   );
   let weather = null;
-  if (isIndoor) {
-    console.log(`   🏠 Indoor/virtual activity — skipping weather fetch.`);
+  if (isIndoor && waypoints.length === 0) {
+    console.log(`   🏠 Indoor/virtual activity — no start coordinates, skipping weather.`);
   } else if (waypoints.length > 0) {
     console.log(`   🌤️ Fetching weather (${waypoints.length} hour${waypoints.length > 1 ? "s" : ""} covered, parallel)...`);
     weather = await fetchWeatherMultiPoint(waypoints);
@@ -294,8 +294,8 @@ async function runUpdateStep(
   try {
     await client.put(`/activities/${activityId}`, { description, private_note: privateNotes });
     console.log(`✅ Strava updated!`);
-    console.log(`   ✏️ Description: ${description.length} chars (public — full analysis)`);
-    console.log(`   🔒 Private notes: ${privateNotes.length} chars (short tips)`);
+    console.log(`   ✏️ Description: ${description.length} chars (public — shareable summary)`);
+    console.log(`   🔒 Private notes: ${privateNotes.length} chars (private — deeper analysis)`);
     console.log(`\n🔗 https://www.strava.com/activities/${activityId}`);
   } catch (err: any) {
     if (err.response?.status === 401 && err.response?.data?.errors?.[0]?.field === "activity:write_permission") {

@@ -58,6 +58,14 @@ GEMINI_API_KEY=your_gemini_key
 # Samsung Health (optional — alternative to Garmin for readiness context)
 # SAMSUNG_EXPORT_DIR=./samsung_export  # Path to unzipped Samsung Health export
 
+# Strava content policy (optional — controls how description/notes are split)
+# Values: balanced (default) | strict | mirror
+# balanced = public: score + summary + verdict + performance sections + segments; private: readiness/tips
+# strict  = public: score + summary + verdict + segments (no HR/zone drill-down); private: stats + tips + zones + performance + readiness + history
+# mirror  = public full narrative; private duplicates public + backend metrics
+# See CONTENT_POLICY.md for detailed examples and decision tree
+STRAVA_CONTENT_POLICY=balanced
+
 # Training targets (optional — enables adherence tracking in digest + dashboard)
 # WEEKLY_TARGET_KM=60
 # WEEKLY_TARGET_HOURS=6
@@ -189,11 +197,19 @@ npm run update
 **What it does:**
 - Lists available crunched files
 - You pick one
-- Builds **description** (public): Category Score (🎯/👤/🏆 three-tier) + Ride Summary + Advanced Metrics (IF/TSS/W/kg, TSS/h, TSS vs 3-month baseline) + Full AI Analysis
-- Builds **private notes** (mobile-friendly): Short actionable tips + key stats
+- Builds **description** (public): Structured for `STRAVA_CONTENT_POLICY`
+- Builds **private notes**: Also depends on policy choice
 - Previews both in terminal
 - You choose: both / description only / notes only / cancel
 - Pushes to Strava via API
+
+**Content depends on your `STRAVA_CONTENT_POLICY` in `.env`:**
+
+- **`balanced`** (default): Public shows score + summary + verdict + performance details + segments. Private shows readiness/recovery/tips.
+- **`strict`**: Public shows full score + summary + verdict + segments (no raw HR/zone drill-down). Private gets compact key stats → tips → zones → full performance analysis → readiness → recommendation → history.
+- **`mirror`**: Public gets full narrative. Private duplicates it + adds backend metrics.
+
+> **See [CONTENT_POLICY.md](CONTENT_POLICY.md) for detailed section orderings, examples, and decision tree.**
 
 **Requires:** `activity:write` scope in your refresh token (see Setup step 3)
 
@@ -681,7 +697,8 @@ npm run dashboard     # regenerate HTML dashboard
 - **AI output validation:** Slot responses are automatically checked for quality (min/max length, data-driven numbers, no filler phrases, bullet format, emoji where required). Validation warnings are logged but never block the pipeline. Rules are defined per-slot in `src/validate.ts`.
 - **Re-running:** You can re-run any step independently. `crunch` overwrites the previous crunched file. `analyze` overwrites the analysis. `update` always previews before pushing.
 - **Updating rider config:** If you change `RIDER_FTP_W`, `RIDER_WEIGHT_KG`, or `RIDER_MAX_HR`, run `npm run recrunch` to recompute all historical metrics with the new values — no API calls needed.
-- **Description vs Notes:** Description (public) contains the full analysis. Private notes (only you) contain short actionable tips — optimized for mobile viewing.
+- **Description vs Notes:** Structure depends on `STRAVA_CONTENT_POLICY` — `balanced` shows full performance sections publicly + keeps coaching private; `strict` keeps public clean (no HR/zone tables) and puts the full training log in private; `mirror` keeps full narrative in both places.
+- **Split policy:** Set `STRAVA_CONTENT_POLICY` in `.env` (`balanced`, `strict`, `mirror`) to control both section ordering and detail split between public description and private notes. See `CONTENT_POLICY.md` for full examples.
 - **Rider config:** Set `RIDER_WEIGHT_KG`, `RIDER_FTP_W`, `RIDER_MAX_HR`, `RIDER_LTHR` in `.env` for advanced metrics. For running, optionally set `RUNNER_RFTP_W`, `RUNNER_MAX_HR`, `RUNNER_LTHR`. Without FTP, IF/TSS/power zones won't be computed.
 - **Garmin MFA:** First login sends a one-time code to your email. Enter it in the terminal. After that the session is cached and no more MFA prompts until the session expires (typically weeks).
 - **Historical context:** Automatically included when `analysis/` contains ≥3 crunched files for the same sport. Shows 1w/1mo/3mo/6mo baselines and how this activity compares. Includes best 20min power, TRIMP Load, and a Trend assessment.

@@ -559,7 +559,18 @@ function renderGradientVAM(c: any): string {
       grad.distribution.map((g: any) => [g.label, `${n(g.pct, 1)}%`])
     ));
     lines.push(``);
-    if (grad.steepest_segment) {
+    if (grad.steepest_segment && typeof grad.steepest_segment === "object") {
+      const ss = grad.steepest_segment;
+      const parts: string[] = [];
+      if (ss.gradient_pct != null) parts.push(`${ss.gradient_pct}% gradient`);
+      if (ss.start_km != null) parts.push(`km ${ss.start_km}`);
+      if (ss.length_m != null) parts.push(`${ss.length_m}m long`);
+      if (ss.avg_speed_kmh != null) parts.push(`${ss.avg_speed_kmh} km/h`);
+      if (parts.length > 0) {
+        lines.push(`**Steepest segment:** ${parts.join(" · ")}`);
+        lines.push(``);
+      }
+    } else if (typeof grad.steepest_segment === "string" && grad.steepest_segment) {
       lines.push(`**Steepest segment:** ${grad.steepest_segment}`);
       lines.push(``);
     }

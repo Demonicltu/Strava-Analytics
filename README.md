@@ -18,8 +18,8 @@ Strava API  →  Download  →  Crunch (30+ metrics)  →  AI Analysis  →  Pus
                                                Garmin wellness (HRV/sleep/Body Battery)
                                                Personal records check
                                                            ↓
-                                                   Description (public)
-                                                   Private Notes (mobile)
+                                                   Description (public summary)
+                                                   Private Notes (private analysis)
 ```
 
 Pick an activity, and the tool will:
@@ -28,7 +28,7 @@ Pick an activity, and the tool will:
 3. **Analyze** via AI — template renders structure deterministically; ~15 sequential AI micro-calls fill interpretation slots (verdict, tips, comparisons, etc.); each slot gets a few-shot example for style consistency; slot outputs are validated before saving; token usage logged per call
    - Includes a deterministic **Training Recommendation** section (load + Garmin history) in the activity report
    - Recommendation payload also includes: change drivers, cause codes, confidence breakdown, recovery ETA, 7-day microcycle, and goal/sport-specific adjustments
-4. **Push** the analysis back to your Strava activity description + private notes
+4. **Push** a shareable public summary to your Strava description and deeper/private analysis to private notes
 
 Beyond single-activity analysis, the tool also provides:
 - 📅 **Weekly digest** — multi-week Sunday review with overtraining warning, race predictions, and training recommendations
@@ -99,7 +99,7 @@ All **outdoor** activities (GPS present) additionally get: **Meteorology** (temp
 | `npm start` | Download activity data from Strava |
 | `npm run crunch` | Compute all metrics locally |
 | `npm run analyze` | Send to AI for written analysis (+ history + Garmin + PR check) |
-| `npm run update` | Push analysis to Strava description + notes |
+| `npm run update` | Push public summary to Strava description + deeper analysis to notes |
 | **`npm run bulk`** | ⏳ Fetch & crunch last 2 years of Strava history (no AI — enables historical context) |
 | **`npm run recrunch`** | 🔬 Re-crunch all existing downloads to pick up new metrics (no API calls) |
 | **`npm run compare`** | 📊 AI fitness trend analysis across any time window |
@@ -232,7 +232,27 @@ RUNNER_LTHR=181        # → LTHR-based running HR zones
 # Training goal (optional — used by digest recommendations / plan suggestions)
 GOAL_EVENT_DATE=2026-09-12   # Goal race/event date in YYYY-MM-DD format
 GOAL_MODE=maintain           # Recommendation tuning: build_fitness / maintain / fat_loss / race_prep
+
+# Strava content policy (optional)
+STRAVA_CONTENT_POLICY=balanced   # balanced / strict / mirror
 ```
+
+`STRAVA_CONTENT_POLICY` controls how sections are ordered and split between public description and private notes:
+
+**1. `balanced` (recommended — default)**
+   - **Public Description**: Score → Summary → Performance Metrics → Verdict → **Performance Details** (HR, Cadence, Climbing, etc.) → Weather → Segments
+   - **Private Notes**: Readiness → Recommendations → Historical Context → Actionable Tips
+   - **Use case**: Social engagement with followers while keeping personal recovery insights private
+
+**2. `strict` (privacy-first)**
+   - **Public Description**: Score → Summary → Metrics → Verdict → Weather → Segments (no zones, no HR/Cadence/Climbing/Gradient/Pacing)
+   - **Private Notes**: Key Stats → Tips → Zones → Performance Sections (HR/Cadence/Climbing/Gradient/Pacing) → Readiness → Recommendation → Historical Baselines
+   - **Use case**: Cleaner public presence; structured private training log
+
+**3. `mirror` (full storytelling)**
+   - **Public Description**: Score → Summary → Verdict → Performance Details → Weather → Segments (full narrative)
+   - **Private Notes**: [Duplicate of public] + **Backend Summary** (Key Stats → Readiness → Zones → Baselines)
+   - **Use case**: Complete public record + private backend metrics for cross-referencing
 
 ---
 
@@ -259,6 +279,7 @@ Strava API: **100 requests / 15 min**, **1,000 / day**. Each activity ≈ 4 API 
 | Doc | Contents |
 |-----|----------|
 | **[COMMANDS.md](COMMANDS.md)** | Full user guide — setup, all commands with examples, workflow, tips |
+| **[CONTENT_POLICY.md](CONTENT_POLICY.md)** | How `balanced` / `strict` / `mirror` change public vs private section ordering |
 | **[METRICS.md](METRICS.md)** | Every metric explained with interpretation tables |
 | **[instructions/common.md](instructions/common.md)** | Shared AI output format rules (zones, weather, history, Garmin readiness) |
 | **[instructions/cycling.md](instructions/cycling.md)** | AI format instructions for cycling activities |

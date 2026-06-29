@@ -19,6 +19,8 @@ Complete guide to setting up and using the Strava Analytics tool to extract, ana
   - [Optional: Activity Fetching](#optional-activity-fetching)
   - [Optional: Rider Profile](#optional-rider-profile-unlocks-advanced-metrics)
   - [Optional: AI Provider](#optional-ai-provider-for-automated-analysis)
+  - [Optional: Strava Content Policy](#optional-strava-content-policy)
+- [Content Policy](#content-policy-balancedstrictmirror)
 - [Usage](#usage)
   - [Fast Mode (Recommended)](#-fast-mode-recommended)
   - [Step-by-Step Pipeline](#step-by-step-pipeline)
@@ -32,7 +34,7 @@ Complete guide to setting up and using the Strava Analytics tool to extract, ana
 
 ## Overview
 
-Strava Analytics downloads your activity data from Strava, computes advanced performance metrics locally (Normalized Power, TSS, IF, W/kg, VO2max, and more), then optionally sends the data to an AI for a written performance analysis. The result can be pushed back to your Strava activity description.
+Strava Analytics downloads your activity data from Strava, computes advanced performance metrics locally (Normalized Power, TSS, IF, W/kg, VO2max, and more), then optionally sends the data to an AI for a written performance analysis. The result can be pushed back to your Strava activity description and private notes.
 
 **Pipeline:**
 
@@ -245,6 +247,27 @@ GEMINI_MODEL=gemini-2.5-flash
 
 > **No API key?** You can still use the tool — just skip the AI step and analyze the crunched JSON manually (see [Manual AI Analysis](#manual-ai-analysis-no-api-key)).
 
+### Optional: Strava Content Policy
+
+This controls how analysis detail is **split and reordered** between public description and private notes — see **[CONTENT_POLICY.md](CONTENT_POLICY.md)** for full details with examples.
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `STRAVA_CONTENT_POLICY` | `balanced` | How to structure public/private: `balanced`, `strict`, or `mirror` |
+
+**Three modes:**
+
+- **`balanced`** (default): Public shows score + key metrics + verdict + performance details + segments. Private keeps readiness/recovery/tips. **Use for:** Social engagement + personal coaching.
+- **`strict`**: Public shows full score + stats + verdict + segments (no raw HR/zone drill-down). Private gets compact key stats → tips → zones → performance analysis → readiness → recommendation → history. **Use for:** Cleaner public + structured private training log.
+- **`mirror`**: Public gets full narrative. Private duplicates it + adds backend metrics. **Use for:** Complete record-keeping.
+
+```env
+# Strava content policy (optional)
+STRAVA_CONTENT_POLICY=balanced   # balanced | strict | mirror
+```
+
+**See [CONTENT_POLICY.md](CONTENT_POLICY.md) for detailed breakdowns, examples, and decision tree.**
+
 ### Complete .env Example
 
 ```env
@@ -273,7 +296,43 @@ GEMINI_API_KEY=AIza...
 # GROQ_API_KEY=gsk_...
 # OPENROUTER_API_KEY=sk-or-...
 # OPENAI_API_KEY=sk-...
+
+# ─── Strava Content Policy (optional) ───
+STRAVA_CONTENT_POLICY=balanced   # balanced / strict / mirror
 ```
+
+---
+
+## Content Policy (Balanced/Strict/Mirror)
+
+The `STRAVA_CONTENT_POLICY` environment variable controls how your activity analysis is **structured and ordered** between public description and private notes.
+
+**Three modes:**
+
+| Mode | Public | Private | Use Case |
+|------|--------|---------|----------|
+| **Balanced** | Score + Summary + Metrics + Verdict + Performance Sections + Segments | Readiness + Recommendations + History + Tips | Full detail public + personal coaching ⭐ |
+| **Strict** | Score + Summary + Metrics + Verdict + Segments (no zones/HR drill-down) | Key Stats + Tips + Zones + Performance Sections + Readiness + History | Cleaner public + deep private analytics 🔒 |
+| **Mirror** | Full narrative (all public sections) | Duplicate public + backend metrics | Complete record-keeping 📦 |
+
+**Set in `.env`:**
+```env
+STRAVA_CONTENT_POLICY=balanced   # balanced | strict | mirror (default: balanced)
+```
+
+### Quick Comparison
+
+**Example: A 50km cycling ride**
+
+- **Balanced**: Followers see "Cat 2 cyclist did 50km at 25 km/h with +5% vs baseline". You see detailed readiness & recovery tips.
+- **Strict**: Followers see full score, stats, verdict, weather and segments. You see compact key stats → coaching tips → zones → HR/cadence/climbing analysis → readiness tables → 7-day plan → 6-month baselines.
+- **Mirror**: Followers see everything. You get same info + backend stats for your records.
+
+**See [CONTENT_POLICY.md](CONTENT_POLICY.md) for:**
+- Detailed section orderings for each mode
+- Full examples by activity type
+- Decision tree to pick your mode
+- Customization guide
 
 ---
 
@@ -341,7 +400,13 @@ npm run update
 ```
 
 - Pick a crunched file (must have matching analysis)
-- Preview the description + private notes in terminal
+- Constructs **public description** (followers see) and **private notes** (only you see)
+- Structure depends on `STRAVA_CONTENT_POLICY`:
+  - **`balanced`** (default): Public = score + summary + metrics + verdict + performance details + segments. Private = readiness + recommendations + history + tips.
+  - **`strict`**: Public = full score + summary + verdict + segments (no zones/drill-down). Private = key stats → tips → zones → HR/Cadence/Climbing/Pacing → readiness → recommendation → history.
+  - **`mirror`**: Public = full narrative. Private = duplicate of public + backend metrics.
+- See **[CONTENT_POLICY.md](CONTENT_POLICY.md)** for detailed examples of each mode
+- Preview both in terminal
 - Choose what to push: both / description only / notes only / cancel
 - Requires `activity:write` scope in your refresh token
 
@@ -422,6 +487,6 @@ The tool handles rate limiting automatically (delays + retry on HTTP 429).
 - **Free AI:** Gemini and Groq both offer free tiers — more than enough for activity analysis.
 - **Re-run any step:** Each step is independent. Re-crunch after updating your FTP to recalculate metrics. Re-analyze to get a fresh AI take.
 - **Crunched data is tiny:** The crunched JSON is 10-40 KB — well within any AI's context window.
-- **Description vs Notes:** The Strava description (public) gets the full analysis. Private notes (visible only to you, great on mobile) get short actionable tips.
+- **Description vs Notes:** The Strava description (public) gets a shareable summary. Private notes (visible only to you) get deeper analysis such as readiness, recommendation, historical context, and actionable tips.
 
 

@@ -80,11 +80,11 @@ async function main() {
 
   // 3. Preview
   console.log("\n" + "═".repeat(60));
-  console.log("📋 DESCRIPTION (public — full analysis):");
+  console.log("📋 DESCRIPTION (public — shareable summary):");
   console.log("─".repeat(60));
   console.log(description);
   console.log("\n" + "═".repeat(60));
-  console.log("🔒 PRIVATE NOTES (short tips — mobile-friendly):");
+  console.log("🔒 PRIVATE NOTES (private — deeper analysis):");
   console.log("─".repeat(60));
   console.log(privateNotes);
   console.log("═".repeat(60));
@@ -131,8 +131,8 @@ async function main() {
     const response = await client.put(`/activities/${activityId}`, updateData);
     console.log(`\n✅ Activity updated successfully!`);
     console.log(`   📋 ${response.data.name}`);
-    if (updateDescription) console.log(`   ✏️ Description updated (${description.length} chars — full analysis)`);
-    if (updateNotes) console.log(`   🔒 Private notes updated (${privateNotes.length} chars — short tips)`);
+    if (updateDescription) console.log(`   ✏️ Description updated (${description.length} chars — shareable summary)`);
+    if (updateNotes) console.log(`   🔒 Private notes updated (${privateNotes.length} chars — deeper analysis)`);
     console.log(`\n🔗 View on Strava: https://www.strava.com/activities/${activityId}`);
   } catch (err: any) {
     console.error(`\n❌ Failed to update activity: ${err.message}`);

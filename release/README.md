@@ -14,8 +14,8 @@
 ```
 Strava API  →  Download  →  Crunch (30+ metrics)  →  AI Analysis  →  Push to Strava
                                                                       ↓
-                                                              Description (public)
-                                                              Private Notes (mobile)
+                                                              Description (public summary)
+                                                              Private Notes (private analysis)
 ```
 
 Pick an activity, and the tool will:
@@ -24,7 +24,7 @@ Pick an activity, and the tool will:
 3. **Analyze** via AI (Gemini, Groq, OpenRouter, or OpenAI) for a written performance report
    - Includes a deterministic **Training Recommendation** block (state/session, 24h/72h guidance, TSS targets, optional recovery ETA, 7-day microcycle)
    - Explainability includes **top drivers** with friendly labels (stable internal codes shown secondarily), confidence breakdown, and rationale/signals context
-4. **Push** the analysis back to your Strava activity description + private notes
+4. **Push** a shareable public summary to your Strava description and deeper/private analysis to private notes
 
 ---
 
@@ -63,7 +63,7 @@ All activities get: **Heart Rate analysis**, **Cardiac Drift**, **Relative Effor
 | `npm start` | Download activity data from Strava |
 | `npm run crunch` | Compute all metrics locally |
 | `npm run analyze` | Send to AI for written analysis + deterministic recommendation/explainability |
-| `npm run update` | Push analysis to Strava description + notes |
+| `npm run update` | Push public summary to Strava description + deeper analysis to notes |
 
 > `npm run fast` loops — after updating one activity, it returns to the activity list. Press `q` to quit.
 
@@ -168,7 +168,27 @@ RUNNER_LTHR=181        # → LTHR-based running HR zones
 # Training goal tuning (optional)
 # GOAL_EVENT_DATE=2026-09-12
 # GOAL_MODE=maintain     # build_fitness / maintain / fat_loss / race_prep
+
+# Strava content policy (optional)
+# STRAVA_CONTENT_POLICY=balanced   # balanced / strict / mirror
 ```
+
+`STRAVA_CONTENT_POLICY` controls how sections are ordered and split between public description and private notes:
+
+**1. `balanced` (recommended — default)**
+   - **Public Description**: Score → Summary → Performance Metrics → Verdict → **Performance Details** (HR, Cadence, Climbing, etc.) → Weather → Segments
+   - **Private Notes**: Readiness → Recommendations → Historical Context → Actionable Tips
+   - **Use case**: Social engagement with followers while keeping personal recovery insights private
+
+**2. `strict` (privacy-first)**
+   - **Public Description**: Score → Summary → Metrics → Verdict → Weather → Segments (no zones, no HR/Cadence/Climbing/Gradient/Pacing)
+   - **Private Notes**: Key Stats → Tips → Zones → Performance Sections (HR/Cadence/Climbing/Gradient/Pacing) → Readiness → Recommendation → Historical Baselines
+   - **Use case**: Cleaner public presence; structured private training log
+
+**3. `mirror` (full storytelling)**
+   - **Public Description**: Score → Summary → Verdict → Performance Details → Weather → Segments (full narrative)
+   - **Private Notes**: [Duplicate of public] + **Backend Summary** (Key Stats → Readiness → Zones → Baselines)
+   - **Use case**: Complete public record + private backend metrics for cross-referencing
 
 ---
 
@@ -196,6 +216,7 @@ Strava API: **100 requests / 15 min**, **1,000 / day**. Each activity ≈ 4 API 
 |-----|----------|
 | **[USER_GUIDE.md](USER_GUIDE.md)** | Full setup guide — Strava API, OAuth, `.env`, usage |
 | **[COMMANDS.md](COMMANDS.md)** | Quick reference — all commands with examples |
+| **[CONTENT_POLICY.md](CONTENT_POLICY.md)** | How `balanced` / `strict` / `mirror` change public vs private section ordering |
 | **[METRICS.md](METRICS.md)** | Every metric explained with interpretation tables |
 
 ---
